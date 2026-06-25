@@ -3,7 +3,7 @@
 export interface Node {
   name: string
   local: boolean
-  status: 'ok' | 'failing' | 'unknown'
+  status: 'ok' | 'failing' | 'down' | 'unknown'
 }
 
 export interface Metrics {

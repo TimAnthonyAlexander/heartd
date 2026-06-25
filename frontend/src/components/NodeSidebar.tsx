@@ -10,6 +10,7 @@ interface Props {
 const statusColor: Record<Node['status'], string> = {
   ok: '#4caf50',
   failing: '#f44336',
+  down: '#f44336',
   unknown: '#9e9e9e',
 }
 
@@ -37,7 +38,7 @@ export function NodeSidebar({ nodes, selected, onSelect }: Props) {
             />
             <ListItemText
               primary={node.name}
-              secondary={node.local ? 'local' : 'peer'}
+              secondary={node.local ? 'local' : node.status}
               slotProps={{
                 primary: { color: '#eee' },
                 secondary: { color: '#777' },

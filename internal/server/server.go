@@ -3,11 +3,13 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/timanthonyalexander/heartd/internal/cluster"
 	"github.com/timanthonyalexander/heartd/internal/config"
 	"github.com/timanthonyalexander/heartd/internal/metrics"
 	"github.com/timanthonyalexander/heartd/internal/storage"
@@ -19,6 +21,9 @@ type Config struct {
 	NodeName string
 	DB       *storage.DB
 	Checks   []config.Check
+	// PeerSecrets are the shared secrets this node accepts on node-to-node
+	// requests (typically the secrets of its configured peers).
+	PeerSecrets []string
 }
 
 // New builds the root HTTP handler: REST API under /api and the embedded
@@ -32,6 +37,11 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/nodes/{name}/metrics", s.handleMetrics)
 	mux.HandleFunc("GET /api/nodes/{name}/metrics/history", s.handleHistory)
 	mux.HandleFunc("GET /api/nodes/{name}/checks", s.handleChecks)
+
+	// Node-to-node endpoints, protected by the shared secret.
+	mux.Handle("POST /api/peer/announce", s.requireSecret(http.HandlerFunc(s.handlePeerAnnounce)))
+	mux.Handle("GET /api/peer/metrics", s.requireSecret(http.HandlerFunc(s.handlePeerMetrics)))
+	mux.Handle("GET /api/peer/checks", s.requireSecret(http.HandlerFunc(s.handlePeerChecks)))
 
 	// Unknown API paths return JSON 404 rather than falling through to the
 	// SPA handler (which would serve index.html with a 200).
@@ -55,18 +65,31 @@ func handleAPINotFound(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 }
 
-// node is the dashboard's view of a single heartd instance. In this wave only
-// the local node exists; peers arrive in a later wave.
+// node is the dashboard's view of a single heartd instance (local or peer).
 type node struct {
 	Name   string `json:"name"`
 	Local  bool   `json:"local"`
-	Status string `json:"status"`
+	Status string `json:"status"` // ok | down | unknown
 }
 
+// handleNodes returns the local node plus all known peers with their current
+// reachability, so each node's dashboard is a full cluster view.
 func (s *server) handleNodes(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, []node{
-		{Name: s.cfg.NodeName, Local: true, Status: "ok"},
-	})
+	out := []node{{Name: s.cfg.NodeName, Local: true, Status: "ok"}}
+
+	peers, err := s.cfg.DB.ListPeers()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	for _, p := range peers {
+		status := p.Status
+		if status == "" {
+			status = "unknown"
+		}
+		out = append(out, node{Name: p.Name, Local: false, Status: status})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleMetrics returns the most recent sample for the named node. It reads the
@@ -159,12 +182,21 @@ type checkDTO struct {
 // that haven't run yet appear as "unknown". For other nodes (peers) it returns
 // whatever statuses have been stored.
 func (s *server) handleChecks(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-
-	stored, err := s.cfg.DB.CheckStatuses(name)
+	out, err := s.checksForNode(r.PathValue("name"))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// checksForNode builds the check DTOs for a node. For the local node it merges
+// the configured check set with stored status (so not-yet-run checks show
+// "unknown"); for other nodes it returns the stored statuses.
+func (s *server) checksForNode(name string) ([]checkDTO, error) {
+	stored, err := s.cfg.DB.CheckStatuses(name)
+	if err != nil {
+		return nil, err
 	}
 	byName := make(map[string]storage.CheckStatus, len(stored))
 	for _, st := range stored {
@@ -184,15 +216,13 @@ func (s *server) handleChecks(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Include any stored statuses not covered by the configured set (peers, or
-	// checks removed from config but still in the DB).
+	// Include any stored statuses not covered by the configured set.
 	for _, st := range stored {
 		if !seen[st.Name] {
 			out = append(out, toCheckDTO(st))
 		}
 	}
-
-	writeJSON(w, http.StatusOK, out)
+	return out, nil
 }
 
 func toCheckDTO(st storage.CheckStatus) checkDTO {
@@ -213,6 +243,90 @@ func queryInt(r *http.Request, key string, def int) int {
 		}
 	}
 	return def
+}
+
+// requireSecret wraps a handler so it only runs when the request carries a
+// valid shared secret in the X-Heartd-Secret header. The comparison is
+// constant-time. If no secrets are configured, all node-to-node requests are
+// rejected.
+func (s *server) requireSecret(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		presented := r.Header.Get(cluster.SecretHeader)
+		if presented == "" || !s.validSecret(presented) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid or missing secret"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *server) validSecret(presented string) bool {
+	ok := false
+	for _, secret := range s.cfg.PeerSecrets {
+		if secret == "" {
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(presented), []byte(secret)) == 1 {
+			ok = true
+		}
+	}
+	return ok
+}
+
+// handlePeerAnnounce records a peer that announced itself to this node.
+func (s *server) handlePeerAnnounce(w http.ResponseWriter, r *http.Request) {
+	var req cluster.AnnounceRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	if req.Name == "" || req.URL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and url are required"})
+		return
+	}
+	// Don't grant a secret from an announce; preserve any existing one.
+	if err := s.cfg.DB.UpsertPeer(storage.Peer{Name: req.Name, URL: req.URL}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"name": s.cfg.NodeName})
+}
+
+// handlePeerMetrics returns this node's own current metrics to a peer.
+func (s *server) handlePeerMetrics(w http.ResponseWriter, r *http.Request) {
+	latest, ok, err := s.cfg.DB.LatestMetric(s.cfg.NodeName)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !ok {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		snap, err := metrics.Collect(ctx, 500*time.Millisecond)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, snap)
+		return
+	}
+	writeJSON(w, http.StatusOK, metrics.Snapshot{
+		CPUPercent:  latest.CPUPercent,
+		MemUsed:     latest.MemUsed,
+		MemTotal:    latest.MemTotal,
+		MemPercent:  latest.MemPercent,
+		CollectedAt: latest.At.UTC().Format(time.RFC3339),
+	})
+}
+
+// handlePeerChecks returns this node's own check statuses to a peer.
+func (s *server) handlePeerChecks(w http.ResponseWriter, r *http.Request) {
+	out, err := s.checksForNode(s.cfg.NodeName)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

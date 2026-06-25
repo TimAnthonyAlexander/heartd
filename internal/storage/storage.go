@@ -48,6 +48,14 @@ CREATE TABLE IF NOT EXISTS check_status (
     at         INTEGER NOT NULL,
     PRIMARY KEY (node, name)
 );
+CREATE TABLE IF NOT EXISTS peer (
+    name       TEXT PRIMARY KEY,
+    url        TEXT NOT NULL,
+    secret     TEXT NOT NULL DEFAULT '',
+    status     TEXT NOT NULL DEFAULT 'unknown',
+    last_seen  INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT ''
+);
 `
 
 // Open opens (creating if needed) the SQLite database at path and ensures the

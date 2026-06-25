@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/timanthonyalexander/heartd/internal/cluster"
 	"github.com/timanthonyalexander/heartd/internal/collector"
 	"github.com/timanthonyalexander/heartd/internal/config"
 	"github.com/timanthonyalexander/heartd/internal/scheduler"
@@ -54,12 +55,28 @@ func run(configPath, addrOverride string) error {
 		go sched.Run(ctx)
 	}
 
+	// Start the cluster poller (announce + poll peers) when peers are configured.
+	if len(cfg.Peers) > 0 {
+		poller := cluster.New(db, cfg.Server.Name, cfg.Server.AdvertiseURL, cfg.Server.PeerPollInterval.Std(), cfg.Peers)
+		go poller.Run(ctx)
+	}
+
 	addr := addrOverride
 	if addr == "" {
 		addr = fmt.Sprintf(":%d", cfg.Server.Port)
 	}
 
-	handler := server.New(server.Config{NodeName: cfg.Server.Name, DB: db, Checks: cfg.Checks})
+	peerSecrets := make([]string, 0, len(cfg.Peers))
+	for _, p := range cfg.Peers {
+		peerSecrets = append(peerSecrets, p.Secret)
+	}
+
+	handler := server.New(server.Config{
+		NodeName:    cfg.Server.Name,
+		DB:          db,
+		Checks:      cfg.Checks,
+		PeerSecrets: peerSecrets,
+	})
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           handler,

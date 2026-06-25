@@ -101,6 +101,8 @@ type Server struct {
 	MetricsInterval Duration   `yaml:"metrics_interval"` // how often to sample metrics; default 30s
 	Retention       Duration   `yaml:"retention"`        // rolling metric retention window; default 7 days (168h)
 	DBPath          string     `yaml:"db_path"`          // sqlite file path; default "heartd.db"
+	AdvertiseURL    string     `yaml:"advertise_url"`    // how peers should reach this node (optional)
+	PeerPollInterval Duration  `yaml:"peer_poll_interval"` // how often to poll peers; default 15s
 }
 
 // BasicAuth holds optional HTTP basic auth credentials for the dashboard.
@@ -172,6 +174,7 @@ const (
 const (
 	defaultPort            = 9300
 	defaultMetricsInterval = 30 * time.Second
+	defaultPeerPollInterval = 15 * time.Second
 	defaultRetention       = 7 * 24 * time.Hour
 	defaultDBPath          = "heartd.db"
 	defaultCheckTimeout    = 10 * time.Second
@@ -230,6 +233,9 @@ func (c *Config) applyDefaults() {
 	if c.Server.DBPath == "" {
 		c.Server.DBPath = defaultDBPath
 	}
+	if c.Server.PeerPollInterval == 0 {
+		c.Server.PeerPollInterval = Duration(defaultPeerPollInterval)
+	}
 
 	if c.Thresholds.CPUPercent == 0 {
 		c.Thresholds.CPUPercent = defaultThreshold
@@ -270,6 +276,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Server.Retention.Std() <= 0 {
 		return fmt.Errorf("server.retention must be greater than 0")
+	}
+	if c.Server.PeerPollInterval.Std() <= 0 {
+		return fmt.Errorf("server.peer_poll_interval must be greater than 0")
 	}
 
 	if c.Server.BasicAuth != nil {
