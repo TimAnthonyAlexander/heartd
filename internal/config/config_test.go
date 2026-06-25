@@ -185,6 +185,22 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadEmptyFileReturnsDefaults(t *testing.T) {
+	for _, content := range []string{"", "   \n\t\n", "# just a comment\n"} {
+		path := writeTemp(t, content)
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load() of empty file %q should not error, got %v", content, err)
+		}
+		if cfg.Server.Port != 9300 {
+			t.Errorf("empty file should yield defaults, Port = %d", cfg.Server.Port)
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("defaults from empty file must validate, got %v", err)
+		}
+	}
+}
+
 func TestLoadMalformedYAML(t *testing.T) {
 	path := writeTemp(t, "server: : : bad\n  port: nope\n")
 	if _, err := Load(path); err == nil {

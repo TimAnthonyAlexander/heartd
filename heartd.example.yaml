@@ -1,49 +1,86 @@
-# heartd configuration. Copy to heartd.yaml next to the binary and edit.
-# All sections are optional; sensible defaults are applied for anything omitted.
+# heartd configuration.
+#
+# Copy to `heartd.yaml` next to the binary (or pass `-config /path/to/heartd.yaml`)
+# and edit. Every section is optional; sensible defaults are applied for anything
+# omitted. Durations accept Go-style units plus a "d" (days) suffix: 30s, 5m, 1h, 7d.
 
 server:
-  name: web-01            # node name shown in the dashboard (default: hostname)
-  port: 9300              # HTTP port for API + dashboard
-  metrics_interval: 30s   # how often system metrics are sampled
-  retention: 7d           # how long samples are kept (rolling window)
-  db_path: heartd.db      # SQLite database file
-  # basic_auth:           # optional; only needed if the port is public
+  name: web-01              # node name shown in the dashboard (default: hostname)
+  port: 9300                # HTTP port for the API + dashboard
+  metrics_interval: 30s     # how often system metrics (cpu/mem/disk/net) are sampled
+  retention: 7d             # rolling window kept for metric/network history
+  db_path: heartd.db        # SQLite database file (relative to the working dir)
+
+  # Multi-node: how this node is reached BY its peers (used when announcing
+  # itself). Set to this node's externally-reachable URL. Leave empty to skip
+  # announcing (peers can still be polled if they're listed below).
+  advertise_url: http://web-01.internal:9300
+  peer_poll_interval: 15s   # how often configured peers are polled
+
+  # Optional HTTP basic auth for the dashboard. Only needed if the port is
+  # exposed publicly; omit for a private network / behind a firewall.
+  # basic_auth:
   #   username: admin
   #   password: change-me
 
-# System-metric alert thresholds (percent). Used by the alerting wave.
+# System-metric alert thresholds, in percent. An alert fires when a value first
+# crosses its threshold and again when it recovers. Set to 0 to disable a metric.
 thresholds:
   cpu_percent: 90
   mem_percent: 90
   disk_percent: 90
 
-# --- The sections below are defined but not yet wired (upcoming waves) ---
+# Other heartd nodes this node knows about. Each node's dashboard shows the whole
+# cluster. Use the SAME shared secret on both ends of a link (it authenticates
+# node-to-node requests via the X-Heartd-Secret header).
+peers:
+  - name: db-01
+    url: http://db-01.internal:9300
+    secret: change-me-shared-secret
 
-# peers:
-#   - name: db-01
-#     url: http://10.0.0.5:9300
-#     secret: shared-secret-here
+# Service health checks. Each runs on its own interval; a check is "failing" if it
+# errors, times out, returns an unexpected status, or exits non-zero.
+checks:
+  - name: API health           # http: GET (or `method`) a URL; 2xx = ok
+    type: http
+    url: https://example.com/health
+    method: GET                 # optional, default GET
+    interval: 30s
+    timeout: 5s
 
-# checks:
-#   - name: API health
-#     type: http
-#     url: https://example.com/health
-#     interval: 30s
-#     timeout: 5s
-#   - name: Postgres
-#     type: tcp
-#     host: 127.0.0.1
-#     port: 5432
-#     interval: 30s
+  - name: Postgres             # tcp: open a connection to host:port
+    type: tcp
+    host: 127.0.0.1
+    port: 5432
+    interval: 30s
+    timeout: 3s
 
-# notify:
-#   webhook:
-#     url: https://hooks.slack.com/services/XXX/YYY/ZZZ
-#   email:
-#     smtp_host: smtp.example.com
-#     smtp_port: 587
-#     username: alerts@example.com
-#     password: change-me
-#     from: alerts@example.com
-#     to: [ops@example.com]
-#     subject_prefix: "[heartd]"
+  - name: nginx running        # process: a process whose name matches is running
+    type: process
+    process: nginx
+    interval: 1m
+
+  - name: Backup freshness     # shell: exit 0 = ok; stdout is shown in the dashboard
+    type: shell
+    command: "test $(find /backups -mtime -1 | wc -l) -gt 0"
+    interval: 5m
+    timeout: 10s
+
+# Alert notification channels. Both are optional; configure at least one to
+# receive alerts. Alerts are de-duplicated: one notification when a problem
+# starts, one when it recovers — never repeated for an ongoing failure.
+notify:
+  # Webhook: HTTP POST with a JSON body to any URL (Slack, Discord, custom, ...).
+  webhook:
+    url: https://hooks.slack.com/services/XXX/YYY/ZZZ
+
+  # Email via SMTP.
+  email:
+    smtp_host: smtp.example.com
+    smtp_port: 587
+    username: alerts@example.com
+    password: change-me
+    from: alerts@example.com
+    to:
+      - ops@example.com
+    subject_prefix: "[heartd]"

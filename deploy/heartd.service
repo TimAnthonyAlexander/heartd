@@ -1,0 +1,40 @@
+# systemd unit for heartd.
+#
+# Install:
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin heartd   # optional dedicated user
+#   sudo mkdir -p /opt/heartd
+#   sudo cp heartd /opt/heartd/                # the binary
+#   sudo cp heartd.yaml /opt/heartd/           # your config
+#   sudo chown -R heartd:heartd /opt/heartd
+#   sudo cp deploy/heartd.service /etc/systemd/system/heartd.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now heartd
+#
+# Logs:   journalctl -u heartd -f
+# Status: systemctl status heartd
+
+[Unit]
+Description=heartd server health monitor
+Documentation=https://github.com/timanthonyalexander/heartd
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=heartd
+Group=heartd
+WorkingDirectory=/opt/heartd
+ExecStart=/opt/heartd/heartd -config /opt/heartd/heartd.yaml
+Restart=on-failure
+RestartSec=5s
+
+# Hardening (relax if a check needs broader access, e.g. shell checks).
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+# heartd writes its SQLite database under WorkingDirectory.
+ReadWritePaths=/opt/heartd
+
+[Install]
+WantedBy=multi-user.target

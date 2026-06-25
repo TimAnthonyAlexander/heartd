@@ -13,7 +13,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -202,10 +204,19 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("read config %q: %w", path, err)
 	}
 
+	// A blank (whitespace-only) file is equivalent to no config: use defaults.
+	if strings.TrimSpace(string(data)) == "" {
+		return Default(), nil
+	}
+
 	var cfg Config
 	dec := yaml.NewDecoder(strings.NewReader(string(data)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
+		// A comment-only file decodes to EOF: also treat as no config.
+		if errors.Is(err, io.EOF) {
+			return Default(), nil
+		}
 		return Config{}, fmt.Errorf("parse config %q: %w", path, err)
 	}
 
