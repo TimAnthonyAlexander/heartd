@@ -1,118 +1,143 @@
-import { useEffect, useRef, useState } from 'react'
-import { Box, Stack, Typography } from '@mui/material'
-import { NodeSidebar } from './components/NodeSidebar'
-import { MetricCard } from './components/MetricCard'
-import { CheckList } from './components/CheckList'
-import {
-  fetchChecks,
-  fetchHistory,
-  fetchMetrics,
-  fetchNodes,
-  type Check,
-  type Metrics,
-  type Node,
-} from './api'
+import { useEffect, useState } from 'react'
+import { Box, Drawer, Skeleton, useMediaQuery } from '@mui/material'
+import { Sidebar } from './components/Sidebar'
+import { TopBar } from './components/TopBar'
+import { MetricPanel, PlaceholderPanel } from './components/MetricPanel'
+import { ChecksTable } from './components/ChecksTable'
+import { useCluster } from './hooks/useCluster'
+import { useHashNode } from './hooks/useHashNode'
+import { useNodeData } from './hooks/useNodeData'
+import { colors, theme } from './theme'
 
-const POLL_MS = 3000
-const HISTORY_LEN = 60
-
-function formatBytes(bytes: number): string {
-  const gb = bytes / 1024 ** 3
-  return `${gb.toFixed(1)} GB`
+function formatGB(bytes: number): string {
+  return (bytes / 1024 ** 3).toFixed(1)
 }
 
 export default function App() {
-  const [nodes, setNodes] = useState<Node[]>([])
-  const [selected, setSelected] = useState<string | null>(null)
-  const [metrics, setMetrics] = useState<Metrics | null>(null)
-  const [checks, setChecks] = useState<Check[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const cpuHistory = useRef<number[]>([])
-  const memHistory = useRef<number[]>([])
+  const { nodes, cpuByNode, summary, ready } = useCluster()
+  const { node: selected, select, replace } = useHashNode()
+  const [rangeMinutes, setRangeMinutes] = useState(60)
+  const [paused, setPaused] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
 
-  // Load the node list once on mount.
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'))
+  const data = useNodeData(selected, rangeMinutes, paused)
+
+  // Default to the local node, or fall back if the hash names an unknown node.
   useEffect(() => {
-    fetchNodes()
-      .then((ns) => {
-        setNodes(ns)
-        const local = ns.find((n) => n.local) ?? ns[0]
-        if (local) setSelected(local.name)
-      })
-      .catch((e) => setError(String(e)))
-  }, [])
-
-  // Poll metrics for the selected node.
-  useEffect(() => {
-    if (!selected) return
-    cpuHistory.current = []
-    memHistory.current = []
-    setChecks([])
-
-    let active = true
-
-    // Seed the sparklines from persisted history so they're populated on load
-    // (and survive a page reload) instead of starting empty.
-    fetchHistory(selected, 60)
-      .then((points) => {
-        if (!active) return
-        cpuHistory.current = points.map((p) => p.cpu_percent).slice(-HISTORY_LEN)
-        memHistory.current = points.map((p) => p.mem_percent).slice(-HISTORY_LEN)
-      })
-      .catch(() => {
-        /* history is best-effort; live polling still fills the sparkline */
-      })
-
-    const tick = async () => {
-      try {
-        const [m, cs] = await Promise.all([fetchMetrics(selected), fetchChecks(selected)])
-        if (!active) return
-        cpuHistory.current = [...cpuHistory.current, m.cpu_percent].slice(-HISTORY_LEN)
-        memHistory.current = [...memHistory.current, m.mem_percent].slice(-HISTORY_LEN)
-        setMetrics(m)
-        setChecks(cs)
-        setError(null)
-      } catch (e) {
-        if (active) setError(String(e))
-      }
+    if (!ready || nodes.length === 0) return
+    const exists = selected && nodes.some((n) => n.name === selected)
+    if (!exists) {
+      const local = nodes.find((n) => n.local) ?? nodes[0]
+      if (local) replace(local.name)
     }
+  }, [ready, nodes, selected, replace])
 
-    tick()
-    const id = setInterval(tick, POLL_MS)
-    return () => {
-      active = false
-      clearInterval(id)
-    }
-  }, [selected])
+  const selectedNode = nodes.find((n) => n.name === selected) ?? null
+  const status = selectedNode ? selectedNode.status : null
+  const m = data.metrics
+
+  const sidebar = (
+    <Sidebar
+      nodes={nodes}
+      cpuByNode={cpuByNode}
+      summary={summary}
+      selected={selected}
+      onSelect={(n) => {
+        select(n)
+        setDrawerOpen(false)
+      }}
+    />
+  )
 
   return (
-    <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: '#121212' }}>
-      <NodeSidebar nodes={nodes} selected={selected} onSelect={setSelected} />
-      <Box sx={{ flex: 1, p: 4 }}>
-        <Typography variant="h5" sx={{ color: '#fff', mb: 3 }}>
-          {selected ?? 'No node selected'}
-        </Typography>
+    <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: colors.bg }}>
+      {isMobile ? (
+        <Drawer open={drawerOpen} onClose={() => setDrawerOpen(false)}>
+          {sidebar}
+        </Drawer>
+      ) : (
+        sidebar
+      )}
 
-        {error && <Typography sx={{ color: '#f44336', mb: 2 }}>{error}</Typography>}
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <TopBar
+          nodeName={selected}
+          status={status}
+          lastUpdated={data.lastUpdated}
+          paused={paused}
+          onTogglePause={() => setPaused((p) => !p)}
+          rangeMinutes={rangeMinutes}
+          onRangeChange={setRangeMinutes}
+          onMenu={isMobile ? () => setDrawerOpen(true) : undefined}
+        />
 
-        {metrics && (
-          <Stack direction="row" spacing={2} useFlexGap sx={{ flexWrap: 'wrap' }}>
-            <MetricCard
-              title="CPU"
-              value={`${metrics.cpu_percent.toFixed(1)}%`}
-              percent={metrics.cpu_percent}
-              history={cpuHistory.current}
-            />
-            <MetricCard
-              title="Memory"
-              value={`${formatBytes(metrics.mem_used)} / ${formatBytes(metrics.mem_total)}`}
-              percent={metrics.mem_percent}
-              history={memHistory.current}
-            />
-          </Stack>
-        )}
+        <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 1280, mx: 'auto' }}>
+          {data.unreachable && (
+            <Box
+              sx={{
+                mb: 3,
+                px: 2.5,
+                py: 1.5,
+                borderRadius: 2,
+                border: `1px solid ${colors.error}55`,
+                bgcolor: `${colors.error}14`,
+                color: colors.error,
+                fontSize: 14,
+              }}
+            >
+              {selected} is unreachable — showing last known values.
+            </Box>
+          )}
 
-        {selected && <CheckList checks={checks} />}
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+              gap: 2.5,
+              mb: 4,
+            }}
+          >
+            {data.loading && !m ? (
+              <>
+                <PanelSkeleton />
+                <PanelSkeleton />
+              </>
+            ) : m ? (
+              <>
+                <MetricPanel
+                  title="CPU"
+                  headline={`${m.cpu_percent.toFixed(1)}%`}
+                  percent={m.cpu_percent}
+                  data={data.series.map((p) => ({ t: p.t, v: p.cpu }))}
+                  dimmed={data.unreachable}
+                />
+                <MetricPanel
+                  title="Memory"
+                  headline={`${formatGB(m.mem_used)} / ${formatGB(m.mem_total)} GB`}
+                  percent={m.mem_percent}
+                  data={data.series.map((p) => ({ t: p.t, v: p.memPct }))}
+                  dimmed={data.unreachable}
+                />
+              </>
+            ) : null}
+            <PlaceholderPanel title="Disk" />
+            <PlaceholderPanel title="Network" />
+          </Box>
+
+          <ChecksTable checks={data.checks} />
+        </Box>
       </Box>
+    </Box>
+  )
+}
+
+function PanelSkeleton() {
+  return (
+    <Box sx={{ p: 3, borderRadius: 2.5, border: `1px solid ${colors.border}` }}>
+      <Skeleton variant="text" width={60} />
+      <Skeleton variant="text" width={140} height={48} />
+      <Skeleton variant="rounded" height={150} sx={{ mt: 2 }} />
     </Box>
   )
 }

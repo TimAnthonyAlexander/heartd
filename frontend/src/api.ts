@@ -1,9 +1,11 @@
 // Typed client for the heartd REST API.
 
+export type NodeStatus = 'ok' | 'down' | 'unknown'
+
 export interface Node {
   name: string
   local: boolean
-  status: 'ok' | 'failing' | 'down' | 'unknown'
+  status: NodeStatus
 }
 
 export interface Metrics {
@@ -14,22 +16,6 @@ export interface Metrics {
   collected_at: string
 }
 
-async function getJSON<T>(path: string): Promise<T> {
-  const res = await fetch(path)
-  if (!res.ok) {
-    throw new Error(`request to ${path} failed: ${res.status}`)
-  }
-  return (await res.json()) as T
-}
-
-export function fetchNodes(): Promise<Node[]> {
-  return getJSON<Node[]>('/api/nodes')
-}
-
-export function fetchMetrics(nodeName: string): Promise<Metrics> {
-  return getJSON<Metrics>(`/api/nodes/${encodeURIComponent(nodeName)}/metrics`)
-}
-
 export interface HistoryPoint {
   cpu_percent: number
   mem_used: number
@@ -38,21 +24,44 @@ export interface HistoryPoint {
   at: string
 }
 
-export function fetchHistory(nodeName: string, minutes = 60): Promise<HistoryPoint[]> {
-  return getJSON<HistoryPoint[]>(
-    `/api/nodes/${encodeURIComponent(nodeName)}/metrics/history?minutes=${minutes}`,
-  )
-}
+export type CheckStatus = 'ok' | 'failing' | 'unknown'
 
 export interface Check {
   name: string
   type: 'http' | 'tcp' | 'process' | 'shell'
-  status: 'ok' | 'failing' | 'unknown'
+  status: CheckStatus
   detail: string
   latency_ms: number
   last_checked: string
 }
 
-export function fetchChecks(nodeName: string): Promise<Check[]> {
-  return getJSON<Check[]>(`/api/nodes/${encodeURIComponent(nodeName)}/checks`)
+async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(path, { signal })
+  if (!res.ok) {
+    throw new Error(`request failed: ${res.status}`)
+  }
+  return (await res.json()) as T
+}
+
+export function fetchNodes(signal?: AbortSignal): Promise<Node[]> {
+  return getJSON<Node[]>('/api/nodes', signal)
+}
+
+export function fetchMetrics(nodeName: string, signal?: AbortSignal): Promise<Metrics> {
+  return getJSON<Metrics>(`/api/nodes/${encodeURIComponent(nodeName)}/metrics`, signal)
+}
+
+export function fetchHistory(
+  nodeName: string,
+  minutes = 60,
+  signal?: AbortSignal,
+): Promise<HistoryPoint[]> {
+  return getJSON<HistoryPoint[]>(
+    `/api/nodes/${encodeURIComponent(nodeName)}/metrics/history?minutes=${minutes}`,
+    signal,
+  )
+}
+
+export function fetchChecks(nodeName: string, signal?: AbortSignal): Promise<Check[]> {
+  return getJSON<Check[]>(`/api/nodes/${encodeURIComponent(nodeName)}/checks`, signal)
 }
