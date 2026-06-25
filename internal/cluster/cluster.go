@@ -17,6 +17,7 @@ import (
 
 	"github.com/timanthonyalexander/heartd/internal/alert"
 	"github.com/timanthonyalexander/heartd/internal/config"
+	"github.com/timanthonyalexander/heartd/internal/settings"
 	"github.com/timanthonyalexander/heartd/internal/storage"
 )
 
@@ -71,19 +72,21 @@ type Poller struct {
 	db           *storage.DB
 	selfName     string
 	advertiseURL string
-	interval     time.Duration
+	settings     *settings.Service
 	peers        []config.Peer
 	client       *http.Client
 	engine       *alert.Engine // optional; nil when alerting is disabled
 }
 
+const fallbackPollInterval = 15 * time.Second
+
 // New builds a Poller for the configured peers. engine may be nil.
-func New(db *storage.DB, selfName, advertiseURL string, interval time.Duration, peers []config.Peer, engine *alert.Engine) *Poller {
+func New(db *storage.DB, selfName, advertiseURL string, set *settings.Service, peers []config.Peer, engine *alert.Engine) *Poller {
 	return &Poller{
 		db:           db,
 		selfName:     selfName,
 		advertiseURL: advertiseURL,
-		interval:     interval,
+		settings:     set,
 		peers:        peers,
 		client:       &http.Client{Timeout: 8 * time.Second},
 		engine:       engine,
@@ -91,21 +94,23 @@ func New(db *storage.DB, selfName, advertiseURL string, interval time.Duration, 
 }
 
 // Run seeds peers into storage, announces this node to them, then polls all
-// peers once immediately and once per interval until ctx is cancelled.
+// peers once immediately and once per current interval until ctx is cancelled.
 func (p *Poller) Run(ctx context.Context) {
 	p.seedPeers()
 	p.seedAlertState()
 	p.announceAll(ctx)
-	p.pollAll(ctx)
 
-	ticker := time.NewTicker(p.interval)
-	defer ticker.Stop()
 	for {
+		p.pollAll(ctx)
+
+		interval := p.settings.General().PeerPollInterval
+		if interval <= 0 {
+			interval = fallbackPollInterval
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			p.pollAll(ctx)
+		case <-time.After(interval):
 		}
 	}
 }

@@ -21,7 +21,7 @@ const (
 // the prior state (edge-triggered). It is safe for concurrent use.
 type Engine struct {
 	dispatcher dispatcher
-	thresholds config.Thresholds
+	thresholds func() config.Thresholds
 
 	mu         sync.Mutex
 	checkState map[string]string // node|name  -> ok|failing|unknown
@@ -29,8 +29,10 @@ type Engine struct {
 	metricOver map[string]bool   // node|cpu, node|mem -> over threshold?
 }
 
-// NewEngine builds an Engine that dispatches via d using the given thresholds.
-func NewEngine(d *Dispatcher, thresholds config.Thresholds) *Engine {
+// NewEngine builds an Engine that dispatches via d, reading thresholds fresh from
+// the provider on each metric evaluation (so runtime-edited thresholds apply
+// immediately).
+func NewEngine(d *Dispatcher, thresholds func() config.Thresholds) *Engine {
 	return &Engine{
 		dispatcher: d,
 		thresholds: thresholds,
@@ -145,9 +147,10 @@ func (e *Engine) ObservePeer(name, status string) {
 // threshold <= 0 disables that metric entirely. diskPercent should be the
 // highest usage across the node's mounts. Safe to call concurrently.
 func (e *Engine) ObserveMetric(node string, cpuPercent, memPercent, diskPercent float64) {
-	e.evaluateMetric(node, "cpu", "CPU", cpuPercent, e.thresholds.CPUPercent)
-	e.evaluateMetric(node, "mem", "Memory", memPercent, e.thresholds.MemPercent)
-	e.evaluateMetric(node, "disk", "Disk", diskPercent, e.thresholds.DiskPercent)
+	th := e.thresholds()
+	e.evaluateMetric(node, "cpu", "CPU", cpuPercent, th.CPUPercent)
+	e.evaluateMetric(node, "mem", "Memory", memPercent, th.MemPercent)
+	e.evaluateMetric(node, "disk", "Disk", diskPercent, th.DiskPercent)
 }
 
 // evaluateMetric handles a single metric's threshold crossing.

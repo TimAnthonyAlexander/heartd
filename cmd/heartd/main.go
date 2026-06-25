@@ -18,6 +18,7 @@ import (
 	"github.com/timanthonyalexander/heartd/internal/config"
 	"github.com/timanthonyalexander/heartd/internal/scheduler"
 	"github.com/timanthonyalexander/heartd/internal/server"
+	"github.com/timanthonyalexander/heartd/internal/settings"
 	"github.com/timanthonyalexander/heartd/internal/storage"
 )
 
@@ -47,23 +48,28 @@ func run(configPath, addrOverride string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Build the alert engine from configured notification channels. nil when
-	// neither email nor webhook is configured, which disables alerting.
-	engine := buildAlertEngine(cfg)
+	// Runtime-configurable settings (intervals, thresholds, notify, checks),
+	// seeded from the YAML config on first run and editable live thereafter.
+	set := settings.New(db)
+	if err := set.Load(cfg); err != nil {
+		return fmt.Errorf("load settings: %w", err)
+	}
+
+	// Alert engine reads thresholds and notify channels fresh from settings, so
+	// edits apply without a restart.
+	engine := buildAlertEngine(set)
 
 	// Start the metrics collection loop.
-	coll := collector.New(db, cfg.Server.Name, cfg.Server.MetricsInterval.Std(), cfg.Server.Retention.Std(), engine)
+	coll := collector.New(db, cfg.Server.Name, set, engine)
 	go coll.Run(ctx)
 
-	// Start the service-check scheduler.
-	if len(cfg.Checks) > 0 {
-		sched := scheduler.New(db, cfg.Server.Name, cfg.Checks, engine)
-		go sched.Run(ctx)
-	}
+	// Start the service-check scheduler (the check list is read live).
+	sched := scheduler.New(db, cfg.Server.Name, set, engine)
+	go sched.Run(ctx)
 
 	// Start the cluster poller (announce + poll peers) when peers are configured.
 	if len(cfg.Peers) > 0 {
-		poller := cluster.New(db, cfg.Server.Name, cfg.Server.AdvertiseURL, cfg.Server.PeerPollInterval.Std(), cfg.Peers, engine)
+		poller := cluster.New(db, cfg.Server.Name, cfg.Server.AdvertiseURL, set, cfg.Peers, engine)
 		go poller.Run(ctx)
 	}
 
@@ -84,7 +90,7 @@ func run(configPath, addrOverride string) error {
 	handler := server.New(server.Config{
 		NodeName:    cfg.Server.Name,
 		DB:          db,
-		Checks:      cfg.Checks,
+		Settings:    set,
 		Auth:        authSvc,
 		PeerSecrets: peerSecrets,
 	})
@@ -126,22 +132,34 @@ func pruneSessions(ctx context.Context, a *auth.Service) {
 	}
 }
 
-// buildAlertEngine assembles the alert engine from configured notify channels.
-// Returns nil when no channel is configured (alerting disabled).
-func buildAlertEngine(cfg config.Config) *alert.Engine {
-	var notifiers []alert.Notifier
-	if cfg.Notify.Email != nil {
-		notifiers = append(notifiers, alert.NewEmailNotifier(*cfg.Notify.Email))
-	}
-	if cfg.Notify.Webhook != nil {
-		notifiers = append(notifiers, alert.NewWebhookNotifier(*cfg.Notify.Webhook))
-	}
+// buildAlertEngine assembles an alert engine whose thresholds and notification
+// channels are read fresh from settings on every use, so runtime edits apply
+// immediately.
+func buildAlertEngine(set *settings.Service) *alert.Engine {
+	dispatcher := alert.NewDynamicDispatcher(func() []alert.Notifier {
+		return notifiersFromSettings(set.Notify())
+	})
+	return alert.NewEngine(dispatcher, func() config.Thresholds {
+		return set.General().Thresholds()
+	})
+}
 
-	dispatcher := alert.NewDispatcher(notifiers...)
-	if dispatcher.Empty() {
-		log.Printf("alerting disabled (no notify channels configured)")
-		return nil
+// notifiersFromSettings builds the active notifiers from current notify settings.
+func notifiersFromSettings(n settings.Notify) []alert.Notifier {
+	var out []alert.Notifier
+	if n.Webhook.Enabled && n.Webhook.URL != "" {
+		out = append(out, alert.NewWebhookNotifier(config.WebhookNotify{URL: n.Webhook.URL}))
 	}
-	log.Printf("alerting enabled (%d channel(s))", len(notifiers))
-	return alert.NewEngine(dispatcher, cfg.Thresholds)
+	if n.Email.Enabled {
+		out = append(out, alert.NewEmailNotifier(config.EmailNotify{
+			SMTPHost:      n.Email.SMTPHost,
+			SMTPPort:      n.Email.SMTPPort,
+			Username:      n.Email.Username,
+			Password:      n.Email.Password,
+			From:          n.Email.From,
+			To:            n.Email.To,
+			SubjectPrefix: n.Email.SubjectPrefix,
+		}))
+	}
+	return out
 }

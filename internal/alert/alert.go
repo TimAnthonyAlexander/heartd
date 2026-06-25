@@ -53,14 +53,15 @@ type Notifier interface {
 // sendTimeout bounds a single notifier delivery attempt.
 const sendTimeout = 8 * time.Second
 
-// Dispatcher fans an Alert out to all configured notifiers without blocking the
-// caller on network I/O.
+// Dispatcher fans an Alert out to its current notifiers without blocking the
+// caller on network I/O. The notifier set is resolved via a provider on each
+// dispatch, so notification settings can change at runtime.
 type Dispatcher struct {
-	notifiers []Notifier
+	provider func() []Notifier
 }
 
-// NewDispatcher builds a Dispatcher over the given notifiers. Nil notifiers are
-// skipped so callers can pass optional channels directly.
+// NewDispatcher builds a Dispatcher over a fixed set of notifiers. Nil notifiers
+// are skipped so callers can pass optional channels directly.
 func NewDispatcher(notifiers ...Notifier) *Dispatcher {
 	filtered := make([]Notifier, 0, len(notifiers))
 	for _, n := range notifiers {
@@ -68,20 +69,30 @@ func NewDispatcher(notifiers ...Notifier) *Dispatcher {
 			filtered = append(filtered, n)
 		}
 	}
-	return &Dispatcher{notifiers: filtered}
+	return &Dispatcher{provider: func() []Notifier { return filtered }}
 }
 
-// Empty reports whether no notifiers are configured.
-func (d *Dispatcher) Empty() bool { return len(d.notifiers) == 0 }
+// NewDynamicDispatcher builds a Dispatcher whose notifiers are resolved fresh on
+// every dispatch via provider — used so runtime-edited notify settings take
+// effect immediately.
+func NewDynamicDispatcher(provider func() []Notifier) *Dispatcher {
+	return &Dispatcher{provider: provider}
+}
 
-// Dispatch delivers a to all notifiers. It does NOT block the caller on network
-// I/O: the sends run in a background goroutine, each with its own timeout
-// context. A failed send is logged (via the standard log package), not retried.
+// Empty reports whether no notifiers are currently configured.
+func (d *Dispatcher) Empty() bool { return len(d.provider()) == 0 }
+
+// Dispatch delivers a to the current notifiers. It does NOT block the caller on
+// network I/O: the sends run in a background goroutine, each with its own
+// timeout context. A failed send is logged, not retried.
 func (d *Dispatcher) Dispatch(a Alert) {
-	if d == nil || len(d.notifiers) == 0 {
+	if d == nil {
 		return
 	}
-	notifiers := d.notifiers
+	notifiers := d.provider()
+	if len(notifiers) == 0 {
+		return
+	}
 	go func() {
 		for _, n := range notifiers {
 			ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)

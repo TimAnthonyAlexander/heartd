@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
+import { HashRouter, Navigate, Route, Routes, useNavigate } from 'react-router'
 import { Box, CircularProgress } from '@mui/material'
 import App from './App'
+import { SettingsPage } from './components/SettingsPage'
 import { AuthScreen } from './components/AuthScreen'
 import {
   authInit,
@@ -77,17 +79,28 @@ export function AuthGate() {
     )
   }
 
+  const onLogout = async () => {
+    try {
+      await authLogout()
+    } finally {
+      setUsername(null)
+      setPhase('login')
+    }
+  }
+
   return (
-    <App
-      username={username}
-      onLogout={async () => {
-        try {
-          await authLogout()
-        } finally {
-          setUsername(null)
-          setPhase('login')
-        }
-      }}
-    />
+    <HashRouter>
+      <Routes>
+        <Route path="/settings" element={<SettingsRoute />} />
+        <Route path="/node/:name" element={<App username={username} onLogout={onLogout} />} />
+        <Route path="/" element={<App username={username} onLogout={onLogout} />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </HashRouter>
   )
+}
+
+function SettingsRoute() {
+  const navigate = useNavigate()
+  return <SettingsPage onClose={() => navigate('/')} />
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate, useParams } from 'react-router'
 import { Box, Drawer, Skeleton, useMediaQuery } from '@mui/material'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
@@ -7,7 +8,6 @@ import { DiskPanel } from './components/DiskPanel'
 import { NetworkPanel } from './components/NetworkPanel'
 import { ChecksTable } from './components/ChecksTable'
 import { useCluster } from './hooks/useCluster'
-import { useHashNode } from './hooks/useHashNode'
 import { useNodeData } from './hooks/useNodeData'
 import { colors, theme } from './theme'
 
@@ -22,7 +22,9 @@ interface AppProps {
 
 export default function App({ username, onLogout }: AppProps) {
   const { nodes, cpuByNode, summary, ready } = useCluster()
-  const { node: selected, select, replace } = useHashNode()
+  const navigate = useNavigate()
+  const { name } = useParams()
+  const selected = name ?? null
   const [rangeMinutes, setRangeMinutes] = useState(60)
   const [paused, setPaused] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -30,15 +32,15 @@ export default function App({ username, onLogout }: AppProps) {
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
   const data = useNodeData(selected, rangeMinutes, paused)
 
-  // Default to the local node, or fall back if the hash names an unknown node.
+  // Default to the local node, or fall back if the URL names an unknown node.
   useEffect(() => {
     if (!ready || nodes.length === 0) return
     const exists = selected && nodes.some((n) => n.name === selected)
     if (!exists) {
       const local = nodes.find((n) => n.local) ?? nodes[0]
-      if (local) replace(local.name)
+      if (local) navigate(`/node/${encodeURIComponent(local.name)}`, { replace: true })
     }
-  }, [ready, nodes, selected, replace])
+  }, [ready, nodes, selected, navigate])
 
   const selectedNode = nodes.find((n) => n.name === selected) ?? null
   const status = selectedNode ? selectedNode.status : null
@@ -51,7 +53,7 @@ export default function App({ username, onLogout }: AppProps) {
       summary={summary}
       selected={selected}
       onSelect={(n) => {
-        select(n)
+        navigate(`/node/${encodeURIComponent(n)}`)
         setDrawerOpen(false)
       }}
     />
@@ -79,6 +81,7 @@ export default function App({ username, onLogout }: AppProps) {
           onMenu={isMobile ? () => setDrawerOpen(true) : undefined}
           username={username}
           onLogout={onLogout}
+          onSettings={() => navigate('/settings')}
         />
 
         <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 1280, mx: 'auto' }}>

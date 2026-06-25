@@ -1,5 +1,6 @@
-// Package scheduler runs each configured service check on its own interval and
-// persists the latest status to storage.
+// Package scheduler runs configured service checks on their schedules and
+// persists their status. The check list is read live from settings, so checks
+// added, edited, or removed in the dashboard take effect without a restart.
 package scheduler
 
 import (
@@ -11,53 +12,82 @@ import (
 	"github.com/timanthonyalexander/heartd/internal/alert"
 	"github.com/timanthonyalexander/heartd/internal/checks"
 	"github.com/timanthonyalexander/heartd/internal/config"
+	"github.com/timanthonyalexander/heartd/internal/settings"
 	"github.com/timanthonyalexander/heartd/internal/storage"
 )
 
-// Scheduler evaluates a node's checks on schedule and writes their status to the
-// database so the dashboard can read current state.
+// tickInterval is how often the scheduler reconciles the check list against
+// what is due to run. It bounds scheduling granularity, not check frequency.
+const tickInterval = time.Second
+
+// Scheduler evaluates a node's checks on their individual intervals.
 type Scheduler struct {
-	db     *storage.DB
-	node   string
-	checks []config.Check
-	engine *alert.Engine // optional; nil when alerting is disabled
+	db       *storage.DB
+	node     string
+	settings *settings.Service
+	engine   *alert.Engine // optional; nil when alerting is disabled
+
+	mu       sync.Mutex
+	lastRun  map[string]time.Time
+	inflight map[string]bool
 }
 
-// New builds a Scheduler for the given node and check set. engine may be nil.
-func New(db *storage.DB, node string, checkList []config.Check, engine *alert.Engine) *Scheduler {
-	return &Scheduler{db: db, node: node, checks: checkList, engine: engine}
+// New builds a Scheduler. engine may be nil.
+func New(db *storage.DB, node string, set *settings.Service, engine *alert.Engine) *Scheduler {
+	return &Scheduler{
+		db:       db,
+		node:     node,
+		settings: set,
+		engine:   engine,
+		lastRun:  make(map[string]time.Time),
+		inflight: make(map[string]bool),
+	}
 }
 
-// Run launches one goroutine per check, each running on its configured interval,
-// and blocks until ctx is cancelled. Each check runs once immediately on start.
+// Run reconciles and dispatches due checks each tick until ctx is cancelled.
 func (s *Scheduler) Run(ctx context.Context) {
 	s.seedAlertState()
 
-	var wg sync.WaitGroup
-	for _, c := range s.checks {
-		wg.Add(1)
-		go func(c config.Check) {
-			defer wg.Done()
-			s.runLoop(ctx, c)
-		}(c)
-	}
-	wg.Wait()
-}
-
-func (s *Scheduler) runLoop(ctx context.Context, c config.Check) {
-	s.evaluate(ctx, c)
-
-	ticker := time.NewTicker(c.Interval.Std())
+	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.evaluate(ctx, c)
+			s.reconcile(ctx)
 		}
 	}
+}
+
+// reconcile launches any enabled check that is due and not already running.
+func (s *Scheduler) reconcile(ctx context.Context) {
+	now := time.Now()
+	for _, c := range s.settings.Checks() {
+		if !c.Enabled || c.Interval <= 0 {
+			continue
+		}
+		s.mu.Lock()
+		last, seen := s.lastRun[c.Name]
+		due := !seen || now.Sub(last) >= c.Interval
+		if due && !s.inflight[c.Name] {
+			s.lastRun[c.Name] = now
+			s.inflight[c.Name] = true
+			s.mu.Unlock()
+			go s.run(ctx, c)
+		} else {
+			s.mu.Unlock()
+		}
+	}
+}
+
+func (s *Scheduler) run(ctx context.Context, c settings.Check) {
+	defer func() {
+		s.mu.Lock()
+		s.inflight[c.Name] = false
+		s.mu.Unlock()
+	}()
+	s.evaluate(ctx, c)
 }
 
 // seedAlertState primes the alert engine with each check's last persisted status
@@ -76,10 +106,10 @@ func (s *Scheduler) seedAlertState() {
 	}
 }
 
-// evaluate runs one check, persists its result, and reports the status to the
-// alert engine (which fires only on transitions).
-func (s *Scheduler) evaluate(ctx context.Context, c config.Check) {
-	res := checks.Run(ctx, c)
+// evaluate runs one check, persists its result, and reports it to the alert
+// engine (which fires only on transitions).
+func (s *Scheduler) evaluate(ctx context.Context, c settings.Check) {
+	res := checks.Run(ctx, toConfigCheck(c))
 	status := storage.CheckStatus{
 		Node:      s.node,
 		Name:      c.Name,
@@ -94,5 +124,20 @@ func (s *Scheduler) evaluate(ctx context.Context, c config.Check) {
 	}
 	if s.engine != nil {
 		s.engine.ObserveCheck(s.node, c.Name, c.Type, string(res.Status), res.Detail)
+	}
+}
+
+func toConfigCheck(c settings.Check) config.Check {
+	return config.Check{
+		Name:     c.Name,
+		Type:     c.Type,
+		Interval: config.Duration(c.Interval),
+		Timeout:  config.Duration(c.Timeout),
+		URL:      c.URL,
+		Method:   c.Method,
+		Host:     c.Host,
+		PortNum:  c.Port,
+		Process:  c.Process,
+		Command:  c.Command,
 	}
 }

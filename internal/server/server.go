@@ -12,8 +12,8 @@ import (
 
 	"github.com/timanthonyalexander/heartd/internal/auth"
 	"github.com/timanthonyalexander/heartd/internal/cluster"
-	"github.com/timanthonyalexander/heartd/internal/config"
 	"github.com/timanthonyalexander/heartd/internal/metrics"
+	"github.com/timanthonyalexander/heartd/internal/settings"
 	"github.com/timanthonyalexander/heartd/internal/storage"
 	"github.com/timanthonyalexander/heartd/internal/web"
 )
@@ -25,7 +25,7 @@ const sessionCookie = "heartd_session"
 type Config struct {
 	NodeName string
 	DB       *storage.DB
-	Checks   []config.Check
+	Settings *settings.Service
 	Auth     *auth.Service
 	// PeerSecrets are the shared secrets this node accepts on node-to-node
 	// requests (typically the secrets of its configured peers).
@@ -56,6 +56,15 @@ func New(cfg Config) http.Handler {
 	protect("GET /api/nodes/{name}/disk", s.handleDisk)
 	protect("GET /api/nodes/{name}/network", s.handleNetwork)
 	protect("GET /api/nodes/{name}/network/history", s.handleNetworkHistory)
+
+	// Runtime configuration (admin).
+	protect("GET /api/settings", s.handleGetSettings)
+	protect("PUT /api/settings/general", s.handlePutGeneral)
+	protect("PUT /api/settings/notify", s.handlePutNotify)
+	protect("POST /api/settings/notify/test", s.handleTestNotify)
+	protect("POST /api/settings/checks", s.handleCreateCheck)
+	protect("PUT /api/settings/checks/{id}", s.handleUpdateCheck)
+	protect("DELETE /api/settings/checks/{id}", s.handleDeleteCheck)
 
 	// Node-to-node endpoints, protected by the shared secret.
 	mux.Handle("POST /api/peer/announce", s.requireSecret(http.HandlerFunc(s.handlePeerAnnounce)))
@@ -228,7 +237,7 @@ func (s *server) checksForNode(name string) ([]checkDTO, error) {
 	seen := make(map[string]bool)
 
 	if name == s.cfg.NodeName {
-		for _, c := range s.cfg.Checks {
+		for _, c := range s.cfg.Settings.Checks() {
 			seen[c.Name] = true
 			if st, ok := byName[c.Name]; ok {
 				out = append(out, toCheckDTO(st))

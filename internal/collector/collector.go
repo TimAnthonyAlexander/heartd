@@ -9,20 +9,24 @@ import (
 
 	"github.com/timanthonyalexander/heartd/internal/alert"
 	"github.com/timanthonyalexander/heartd/internal/metrics"
+	"github.com/timanthonyalexander/heartd/internal/settings"
 	"github.com/timanthonyalexander/heartd/internal/storage"
 )
 
 // cpuWindow is how long each CPU sample blocks to compute a usage percentage.
 const cpuWindow = 500 * time.Millisecond
 
-// Collector samples metrics for the local node on a fixed interval and writes
-// them to the database, pruning anything older than the retention window.
+// fallbackInterval is used if the configured interval is somehow invalid.
+const fallbackInterval = 30 * time.Second
+
+// Collector samples metrics for the local node, writing them to the database and
+// pruning anything older than the retention window. The interval and retention
+// are read fresh from settings each cycle, so edits apply without a restart.
 type Collector struct {
-	db        *storage.DB
-	node      string
-	interval  time.Duration
-	retention time.Duration
-	engine    *alert.Engine // optional; nil when alerting is disabled
+	db       *storage.DB
+	node     string
+	settings *settings.Service
+	engine   *alert.Engine // optional; nil when alerting is disabled
 
 	// Previous network counters, for deriving throughput rates between samples.
 	prevNet   metrics.NetCounters
@@ -30,26 +34,25 @@ type Collector struct {
 }
 
 // New builds a Collector for the local node. engine may be nil.
-func New(db *storage.DB, node string, interval, retention time.Duration, engine *alert.Engine) *Collector {
-	return &Collector{db: db, node: node, interval: interval, retention: retention, engine: engine}
+func New(db *storage.DB, node string, set *settings.Service, engine *alert.Engine) *Collector {
+	return &Collector{db: db, node: node, settings: set, engine: engine}
 }
 
-// Run samples immediately, then once per interval until ctx is cancelled.
+// Run samples immediately, then once per current interval until ctx is cancelled.
 // It blocks, so callers typically run it in a goroutine.
 func (c *Collector) Run(ctx context.Context) {
-	c.sampleOnce(ctx)
-	c.prune()
-
-	ticker := time.NewTicker(c.interval)
-	defer ticker.Stop()
-
 	for {
+		c.sampleOnce(ctx)
+		c.prune()
+
+		interval := c.settings.General().MetricsInterval
+		if interval <= 0 {
+			interval = fallbackInterval
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			c.sampleOnce(ctx)
-			c.prune()
+		case <-time.After(interval):
 		}
 	}
 }
@@ -158,9 +161,13 @@ func (c *Collector) sampleNet(ctx context.Context, at time.Time) {
 	}
 }
 
-// prune removes samples older than the retention window.
+// prune removes samples older than the current retention window.
 func (c *Collector) prune() {
-	before := time.Now().UTC().Add(-c.retention)
+	retention := c.settings.General().Retention
+	if retention <= 0 {
+		return
+	}
+	before := time.Now().UTC().Add(-retention)
 	if _, err := c.db.Prune(before); err != nil {
 		log.Printf("collector: prune failed: %v", err)
 	}

@@ -76,7 +76,7 @@ func newTestEngine(t *testing.T) (*Engine, *fakeNotifier) {
 	f := &fakeNotifier{}
 	d := NewDispatcher(f)
 	th := config.Thresholds{CPUPercent: 90, MemPercent: 80, DiskPercent: 90}
-	return NewEngine(d, th), f
+	return NewEngine(d, func() config.Thresholds { return th }), f
 }
 
 func TestObserveCheckTransitions(t *testing.T) {
@@ -210,7 +210,7 @@ func TestObserveMetricThresholdDisabled(t *testing.T) {
 	f := &fakeNotifier{}
 	d := NewDispatcher(f)
 	// CPU disabled (0), Mem enabled at 80.
-	e := NewEngine(d, config.Thresholds{CPUPercent: 0, MemPercent: 80})
+	e := NewEngine(d, func() config.Thresholds { return config.Thresholds{CPUPercent: 0, MemPercent: 80} })
 
 	// Huge CPU must never fire because threshold <= 0.
 	e.ObserveMetric("web-01", 100, 10, 10)
@@ -227,7 +227,7 @@ func TestObserveMetricThresholdDisabled(t *testing.T) {
 func TestObserveMetricDiskTransitions(t *testing.T) {
 	f := &fakeNotifier{}
 	d := NewDispatcher(f)
-	e := NewEngine(d, config.Thresholds{CPUPercent: 90, MemPercent: 90, DiskPercent: 90})
+	e := NewEngine(d, func() config.Thresholds { return config.Thresholds{CPUPercent: 90, MemPercent: 90, DiskPercent: 90} })
 
 	// Disk below threshold: nothing (CPU/mem also below).
 	e.ObserveMetric("web-01", 10, 10, 80)

@@ -67,6 +67,28 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
   return data as T
 }
 
+async function putJSON<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error((data as { error?: string }).error || `request failed: ${res.status}`)
+  }
+  return data as T
+}
+
+async function delJSON<T>(path: string): Promise<T> {
+  const res = await fetch(path, { method: 'DELETE' })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error((data as { error?: string }).error || `request failed: ${res.status}`)
+  }
+  return data as T
+}
+
 export interface AuthStatus {
   initialized: boolean
   authenticated: boolean
@@ -151,4 +173,85 @@ export function fetchNetworkHistory(
     `/api/nodes/${encodeURIComponent(nodeName)}/network/history?minutes=${minutes}`,
     signal,
   )
+}
+
+// ----- Settings -----
+
+export interface GeneralSettings {
+  metrics_interval_sec: number
+  peer_poll_interval_sec: number
+  retention_sec: number
+  cpu_threshold: number
+  mem_threshold: number
+  disk_threshold: number
+}
+
+export interface EmailNotify {
+  enabled: boolean
+  smtp_host: string
+  smtp_port: number
+  username: string
+  password: string
+  from: string
+  to: string[]
+  subject_prefix: string
+}
+
+export interface WebhookNotify {
+  enabled: boolean
+  url: string
+}
+
+export interface NotifySettings {
+  email: EmailNotify
+  webhook: WebhookNotify
+}
+
+export interface CheckConfig {
+  id: number
+  name: string
+  type: 'http' | 'tcp' | 'process' | 'shell'
+  interval_sec: number
+  timeout_sec: number
+  url: string
+  method: string
+  host: string
+  port: number
+  process: string
+  command: string
+  enabled: boolean
+}
+
+export interface AllSettings {
+  general: GeneralSettings
+  notify: NotifySettings
+  checks: CheckConfig[]
+}
+
+export function fetchSettings(): Promise<AllSettings> {
+  return getJSON<AllSettings>('/api/settings')
+}
+
+export function updateGeneral(g: GeneralSettings): Promise<GeneralSettings> {
+  return putJSON<GeneralSettings>('/api/settings/general', g)
+}
+
+export function updateNotify(n: NotifySettings): Promise<NotifySettings> {
+  return putJSON<NotifySettings>('/api/settings/notify', n)
+}
+
+export function createCheck(c: Omit<CheckConfig, 'id'>): Promise<CheckConfig> {
+  return postJSON<CheckConfig>('/api/settings/checks', c)
+}
+
+export function updateCheck(c: CheckConfig): Promise<{ status: string }> {
+  return putJSON<{ status: string }>(`/api/settings/checks/${c.id}`, c)
+}
+
+export function deleteCheck(id: number): Promise<{ status: string }> {
+  return delJSON<{ status: string }>(`/api/settings/checks/${id}`)
+}
+
+export function testNotify(n: NotifySettings): Promise<Record<string, string>> {
+  return postJSON<Record<string, string>>('/api/settings/notify/test', n)
 }

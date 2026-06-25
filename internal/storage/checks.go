@@ -17,6 +17,14 @@ type CheckStatus struct {
 	At        time.Time // when last evaluated (UTC)
 }
 
+// DeleteCheckStatus removes the stored status for (node, name). No error if absent.
+func (db *DB) DeleteCheckStatus(node, name string) error {
+	if _, err := db.conn.Exec(`DELETE FROM check_status WHERE node = ? AND name = ?;`, node, name); err != nil {
+		return fmt.Errorf("storage: delete check status for node %q name %q: %w", node, name, err)
+	}
+	return nil
+}
+
 // UpsertCheckStatus inserts or updates the current status for (Node, Name).
 func (db *DB) UpsertCheckStatus(s CheckStatus) error {
 	const q = `

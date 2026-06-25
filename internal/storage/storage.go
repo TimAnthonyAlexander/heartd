@@ -88,6 +88,24 @@ CREATE TABLE IF NOT EXISTS session (
     expires_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_session_expires ON session(expires_at);
+CREATE TABLE IF NOT EXISTS setting (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS check_config (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT NOT NULL,
+    type         TEXT NOT NULL,
+    interval_sec INTEGER NOT NULL,
+    timeout_sec  INTEGER NOT NULL,
+    url          TEXT NOT NULL DEFAULT '',
+    method       TEXT NOT NULL DEFAULT '',
+    host         TEXT NOT NULL DEFAULT '',
+    port         INTEGER NOT NULL DEFAULT 0,
+    process      TEXT NOT NULL DEFAULT '',
+    command      TEXT NOT NULL DEFAULT '',
+    enabled      INTEGER NOT NULL DEFAULT 1
+);
 `
 
 // Open opens (creating if needed) the SQLite database at path and ensures the

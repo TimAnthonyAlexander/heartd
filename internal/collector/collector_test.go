@@ -5,8 +5,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/timanthonyalexander/heartd/internal/config"
+	"github.com/timanthonyalexander/heartd/internal/settings"
 	"github.com/timanthonyalexander/heartd/internal/storage"
 )
+
+// testSettings builds a settings service seeded with the given retention.
+func testSettings(t *testing.T, db *storage.DB, retention time.Duration) *settings.Service {
+	t.Helper()
+	set := settings.New(db)
+	if err := set.Load(config.Default()); err != nil {
+		t.Fatalf("settings load: %v", err)
+	}
+	g := set.General()
+	g.RetentionSec = int64(retention.Seconds())
+	g.MetricsIntervalSec = int64(time.Hour.Seconds())
+	if err := set.SetGeneral(g); err != nil {
+		t.Fatalf("set general: %v", err)
+	}
+	return set
+}
 
 func TestCollectorSamplesAndPersists(t *testing.T) {
 	db, err := storage.Open(":memory:")
@@ -15,7 +33,7 @@ func TestCollectorSamplesAndPersists(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	c := New(db, "test-node", time.Hour, time.Hour, nil)
+	c := New(db, "test-node", testSettings(t, db, time.Hour), nil)
 
 	// One immediate sample, then stop before the first tick fires.
 	c.sampleOnce(context.Background())
@@ -51,7 +69,7 @@ func TestCollectorPrunesOldSamples(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	c := New(db, "test-node", time.Hour, time.Hour, nil)
+	c := New(db, "test-node", testSettings(t, db, time.Hour), nil)
 	c.prune()
 
 	if _, ok, err := db.LatestMetric("test-node"); err != nil {
@@ -69,7 +87,7 @@ func TestCollectorRunStopsOnContextCancel(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	ctx, cancel := context.WithCancel(context.Background())
-	c := New(db, "test-node", time.Hour, time.Hour, nil)
+	c := New(db, "test-node", testSettings(t, db, time.Hour), nil)
 
 	done := make(chan struct{})
 	go func() {
