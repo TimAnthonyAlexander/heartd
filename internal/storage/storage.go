@@ -56,6 +56,25 @@ CREATE TABLE IF NOT EXISTS peer (
     last_seen  INTEGER NOT NULL DEFAULT 0,
     last_error TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS disk_status (
+    node    TEXT NOT NULL,
+    mount   TEXT NOT NULL,
+    used    INTEGER NOT NULL,
+    total   INTEGER NOT NULL,
+    percent REAL NOT NULL,
+    at      INTEGER NOT NULL,
+    PRIMARY KEY (node, mount)
+);
+CREATE TABLE IF NOT EXISTS net_sample (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    node       TEXT NOT NULL,
+    recv_bytes INTEGER NOT NULL,
+    sent_bytes INTEGER NOT NULL,
+    recv_rate  REAL NOT NULL,
+    sent_rate  REAL NOT NULL,
+    at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_net_sample_node_at ON net_sample(node, at);
 `
 
 // Open opens (creating if needed) the SQLite database at path and ensures the

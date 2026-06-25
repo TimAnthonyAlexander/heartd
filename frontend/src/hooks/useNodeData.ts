@@ -1,10 +1,15 @@
 import { useEffect, useState } from 'react'
 import {
   fetchChecks,
+  fetchDisk,
   fetchHistory,
   fetchMetrics,
+  fetchNetwork,
+  fetchNetworkHistory,
   type Check,
+  type DiskMount,
   type Metrics,
+  type NetCurrent,
 } from '../api'
 
 const POLL_MS = 3000
@@ -18,10 +23,19 @@ export interface ChartPoint {
   memTotal: number
 }
 
+export interface NetPoint {
+  t: number
+  recv: number
+  sent: number
+}
+
 export interface NodeData {
   metrics: Metrics | null
   series: ChartPoint[]
   checks: Check[]
+  disk: DiskMount[]
+  net: NetCurrent | null
+  netSeries: NetPoint[]
   loading: boolean
   unreachable: boolean
   lastUpdated: number | null
@@ -31,6 +45,9 @@ const EMPTY: NodeData = {
   metrics: null,
   series: [],
   checks: [],
+  disk: [],
+  net: null,
+  netSeries: [],
   loading: true,
   unreachable: false,
   lastUpdated: null,
@@ -60,7 +77,10 @@ export function useNodeData(
 
     const seed = async () => {
       try {
-        const hist = await fetchHistory(node, rangeMinutes, controller.signal)
+        const [hist, netHist] = await Promise.all([
+          fetchHistory(node, rangeMinutes, controller.signal),
+          fetchNetworkHistory(node, rangeMinutes, controller.signal),
+        ])
         if (!active) return
         const series = hist.map<ChartPoint>((p) => ({
           t: new Date(p.at).getTime(),
@@ -69,17 +89,24 @@ export function useNodeData(
           memUsed: p.mem_used,
           memTotal: p.mem_total,
         }))
-        setData((d) => ({ ...d, series }))
+        const netSeries = netHist.map<NetPoint>((p) => ({
+          t: new Date(p.at).getTime(),
+          recv: p.recv_rate,
+          sent: p.sent_rate,
+        }))
+        setData((d) => ({ ...d, series, netSeries }))
       } catch {
-        /* history is best-effort; live polling fills the chart */
+        /* history is best-effort; live polling fills the charts */
       }
     }
 
     const tick = async () => {
       try {
-        const [m, cs] = await Promise.all([
+        const [m, cs, disk, net] = await Promise.all([
           fetchMetrics(node, controller.signal),
           fetchChecks(node, controller.signal),
+          fetchDisk(node, controller.signal),
+          fetchNetwork(node, controller.signal),
         ])
         if (!active) return
         const point: ChartPoint = {
@@ -90,11 +117,24 @@ export function useNodeData(
           memTotal: m.mem_total,
         }
         setData((d) => {
-          const series = [...d.series, point].slice(-MAX_POINTS)
+          // Skip duplicate points: /metrics returns the latest persisted sample,
+          // which only advances every metrics_interval (slower than our poll).
+          const lastT = d.series[d.series.length - 1]?.t
+          const series = lastT === point.t ? d.series : [...d.series, point].slice(-MAX_POINTS)
+
+          const netT = net ? new Date(net.at).getTime() : null
+          const lastNetT = d.netSeries[d.netSeries.length - 1]?.t
+          const netSeries =
+            net && netT !== lastNetT
+              ? [...d.netSeries, { t: netT!, recv: net.recv_rate, sent: net.sent_rate }].slice(-MAX_POINTS)
+              : d.netSeries
           return {
             metrics: m,
             series,
             checks: cs,
+            disk,
+            net,
+            netSeries,
             loading: false,
             unreachable: false,
             lastUpdated: Date.now(),

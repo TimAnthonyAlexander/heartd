@@ -65,3 +65,44 @@ export function fetchHistory(
 export function fetchChecks(nodeName: string, signal?: AbortSignal): Promise<Check[]> {
   return getJSON<Check[]>(`/api/nodes/${encodeURIComponent(nodeName)}/checks`, signal)
 }
+
+export interface DiskMount {
+  mount: string
+  used: number
+  total: number
+  percent: number
+  at: string
+}
+
+export interface NetCurrent {
+  recv_bytes: number
+  sent_bytes: number
+  recv_rate: number
+  sent_rate: number
+  at: string
+}
+
+export interface NetHistoryPoint {
+  recv_rate: number
+  sent_rate: number
+  at: string
+}
+
+export function fetchDisk(nodeName: string, signal?: AbortSignal): Promise<DiskMount[]> {
+  return getJSON<DiskMount[]>(`/api/nodes/${encodeURIComponent(nodeName)}/disk`, signal)
+}
+
+export function fetchNetwork(nodeName: string, signal?: AbortSignal): Promise<NetCurrent | null> {
+  return getJSON<NetCurrent | null>(`/api/nodes/${encodeURIComponent(nodeName)}/network`, signal)
+}
+
+export function fetchNetworkHistory(
+  nodeName: string,
+  minutes = 60,
+  signal?: AbortSignal,
+): Promise<NetHistoryPoint[]> {
+  return getJSON<NetHistoryPoint[]>(
+    `/api/nodes/${encodeURIComponent(nodeName)}/network/history?minutes=${minutes}`,
+    signal,
+  )
+}

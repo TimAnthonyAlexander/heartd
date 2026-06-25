@@ -37,11 +37,16 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/nodes/{name}/metrics", s.handleMetrics)
 	mux.HandleFunc("GET /api/nodes/{name}/metrics/history", s.handleHistory)
 	mux.HandleFunc("GET /api/nodes/{name}/checks", s.handleChecks)
+	mux.HandleFunc("GET /api/nodes/{name}/disk", s.handleDisk)
+	mux.HandleFunc("GET /api/nodes/{name}/network", s.handleNetwork)
+	mux.HandleFunc("GET /api/nodes/{name}/network/history", s.handleNetworkHistory)
 
 	// Node-to-node endpoints, protected by the shared secret.
 	mux.Handle("POST /api/peer/announce", s.requireSecret(http.HandlerFunc(s.handlePeerAnnounce)))
 	mux.Handle("GET /api/peer/metrics", s.requireSecret(http.HandlerFunc(s.handlePeerMetrics)))
 	mux.Handle("GET /api/peer/checks", s.requireSecret(http.HandlerFunc(s.handlePeerChecks)))
+	mux.Handle("GET /api/peer/disk", s.requireSecret(http.HandlerFunc(s.handlePeerDisk)))
+	mux.Handle("GET /api/peer/network", s.requireSecret(http.HandlerFunc(s.handlePeerNetwork)))
 
 	// Unknown API paths return JSON 404 rather than falling through to the
 	// SPA handler (which would serve index.html with a 200).
@@ -243,6 +248,122 @@ func queryInt(r *http.Request, key string, def int) int {
 		}
 	}
 	return def
+}
+
+// diskDTO is one mount's current usage.
+type diskDTO struct {
+	Mount   string  `json:"mount"`
+	Used    uint64  `json:"used"`
+	Total   uint64  `json:"total"`
+	Percent float64 `json:"percent"`
+	At      string  `json:"at"`
+}
+
+// netDTO is a node's latest network throughput.
+type netDTO struct {
+	RecvBytes uint64  `json:"recv_bytes"`
+	SentBytes uint64  `json:"sent_bytes"`
+	RecvRate  float64 `json:"recv_rate"`
+	SentRate  float64 `json:"sent_rate"`
+	At        string  `json:"at"`
+}
+
+type netHistoryPoint struct {
+	RecvRate float64 `json:"recv_rate"`
+	SentRate float64 `json:"sent_rate"`
+	At       string  `json:"at"`
+}
+
+func (s *server) diskForNode(name string) ([]diskDTO, error) {
+	rows, err := s.cfg.DB.DiskStatuses(name)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]diskDTO, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, diskDTO{
+			Mount: d.Mount, Used: d.Used, Total: d.Total, Percent: d.Percent,
+			At: d.At.UTC().Format(time.RFC3339),
+		})
+	}
+	return out, nil
+}
+
+func (s *server) netForNode(name string) (netDTO, bool, error) {
+	n, ok, err := s.cfg.DB.LatestNetSample(name)
+	if err != nil || !ok {
+		return netDTO{}, ok, err
+	}
+	return netDTO{
+		RecvBytes: n.RecvBytes, SentBytes: n.SentBytes,
+		RecvRate: n.RecvRate, SentRate: n.SentRate,
+		At: n.At.UTC().Format(time.RFC3339),
+	}, true, nil
+}
+
+func (s *server) handleDisk(w http.ResponseWriter, r *http.Request) {
+	out, err := s.diskForNode(r.PathValue("name"))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *server) handleNetwork(w http.ResponseWriter, r *http.Request) {
+	n, ok, err := s.netForNode(r.PathValue("name"))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusOK, nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, n)
+}
+
+func (s *server) handleNetworkHistory(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	minutes := queryInt(r, "minutes", 60)
+	limit := queryInt(r, "limit", 200)
+
+	since := time.Now().UTC().Add(-time.Duration(minutes) * time.Minute)
+	samples, err := s.cfg.DB.RecentNetSamples(name, since, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	points := make([]netHistoryPoint, 0, len(samples))
+	for _, n := range samples {
+		points = append(points, netHistoryPoint{
+			RecvRate: n.RecvRate, SentRate: n.SentRate,
+			At: n.At.UTC().Format(time.RFC3339),
+		})
+	}
+	writeJSON(w, http.StatusOK, points)
+}
+
+func (s *server) handlePeerDisk(w http.ResponseWriter, r *http.Request) {
+	out, err := s.diskForNode(s.cfg.NodeName)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *server) handlePeerNetwork(w http.ResponseWriter, r *http.Request) {
+	n, ok, err := s.netForNode(s.cfg.NodeName)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusOK, nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, n)
 }
 
 // requireSecret wraps a handler so it only runs when the request carries a

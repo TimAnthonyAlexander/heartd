@@ -48,6 +48,24 @@ type peerCheck struct {
 	LastChecked string `json:"last_checked"`
 }
 
+// peerDisk mirrors one element of /api/peer/disk.
+type peerDisk struct {
+	Mount   string  `json:"mount"`
+	Used    uint64  `json:"used"`
+	Total   uint64  `json:"total"`
+	Percent float64 `json:"percent"`
+	At      string  `json:"at"`
+}
+
+// peerNet mirrors /api/peer/network.
+type peerNet struct {
+	RecvBytes uint64  `json:"recv_bytes"`
+	SentBytes uint64  `json:"sent_bytes"`
+	RecvRate  float64 `json:"recv_rate"`
+	SentRate  float64 `json:"sent_rate"`
+	At        string  `json:"at"`
+}
+
 // Poller announces this node to peers and polls them on an interval.
 type Poller struct {
 	db           *storage.DB
@@ -200,10 +218,54 @@ func (p *Poller) pollPeer(ctx context.Context, peer config.Peer) {
 		}
 	}
 
+	p.storePeerDisk(ctx, peer)
+	p.storePeerNet(ctx, peer)
+
 	_ = p.db.SetPeerStatus(peer.Name, "ok", time.Now().UTC(), "")
 	if p.engine != nil {
 		p.engine.ObservePeer(peer.Name, "ok")
 	}
+}
+
+// storePeerDisk fetches a peer's disk usage and records it under the peer's name.
+func (p *Poller) storePeerDisk(ctx context.Context, peer config.Peer) {
+	var disks []peerDisk
+	if err := p.getJSON(ctx, peer, "/api/peer/disk", &disks); err != nil {
+		return
+	}
+	mounts := make([]string, 0, len(disks))
+	for _, d := range disks {
+		mounts = append(mounts, d.Mount)
+		at, perr := time.Parse(time.RFC3339, d.At)
+		if perr != nil {
+			at = time.Now().UTC()
+		}
+		_ = p.db.UpsertDiskStatus(storage.DiskStatus{
+			Node: peer.Name, Mount: d.Mount, Used: d.Used, Total: d.Total, Percent: d.Percent, At: at,
+		})
+	}
+	// Drop stale peer mounts no longer reported.
+	_ = p.db.DeleteDiskStatusesExcept(peer.Name, mounts)
+}
+
+// storePeerNet fetches a peer's latest network sample and records it under the
+// peer's name.
+func (p *Poller) storePeerNet(ctx context.Context, peer config.Peer) {
+	var n peerNet
+	if err := p.getJSON(ctx, peer, "/api/peer/network", &n); err != nil {
+		return
+	}
+	if n.At == "" {
+		return // peer has no sample yet
+	}
+	at, perr := time.Parse(time.RFC3339, n.At)
+	if perr != nil {
+		at = time.Now().UTC()
+	}
+	_ = p.db.InsertNetSample(storage.NetSample{
+		Node: peer.Name, RecvBytes: n.RecvBytes, SentBytes: n.SentBytes,
+		RecvRate: n.RecvRate, SentRate: n.SentRate, At: at,
+	})
 }
 
 func (p *Poller) fetchMetrics(ctx context.Context, peer config.Peer) (peerMetrics, error) {

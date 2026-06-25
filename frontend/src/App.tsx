@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react'
 import { Box, Drawer, Skeleton, useMediaQuery } from '@mui/material'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
-import { MetricPanel, PlaceholderPanel } from './components/MetricPanel'
+import { MetricPanel } from './components/MetricPanel'
+import { DiskPanel } from './components/DiskPanel'
+import { NetworkPanel } from './components/NetworkPanel'
 import { ChecksTable } from './components/ChecksTable'
 import { useCluster } from './hooks/useCluster'
 import { useHashNode } from './hooks/useHashNode'
@@ -121,8 +123,8 @@ export default function App() {
                 />
               </>
             ) : null}
-            <PlaceholderPanel title="Disk" />
-            <PlaceholderPanel title="Network" />
+            <DiskPanel disks={data.disk} dimmed={data.unreachable} />
+            <NetworkPanel net={data.net} series={data.netSeries} dimmed={data.unreachable} />
           </Box>
 
           <ChecksTable checks={data.checks} />

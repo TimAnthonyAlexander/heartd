@@ -179,11 +179,11 @@ func TestObserveMetricTransitions(t *testing.T) {
 	e, f := newTestEngine(t) // CPU threshold 90, Mem 80
 
 	// below -> below: nothing.
-	e.ObserveMetric("web-01", 10, 10)
+	e.ObserveMetric("web-01", 10, 10, 10)
 	stableCount(t, f, 0)
 
 	// below -> above (CPU): fires once.
-	e.ObserveMetric("web-01", 95, 10)
+	e.ObserveMetric("web-01", 95, 10, 10)
 	waitFor(t, f, 1)
 	a := f.snapshot()[0]
 	if !a.Firing || a.Subject != "CPU" || a.Kind != KindMetric {
@@ -194,11 +194,11 @@ func TestObserveMetricTransitions(t *testing.T) {
 	}
 
 	// above -> above: nothing.
-	e.ObserveMetric("web-01", 96, 10)
+	e.ObserveMetric("web-01", 96, 10, 10)
 	stableCount(t, f, 1)
 
 	// above -> below: recovered.
-	e.ObserveMetric("web-01", 50, 10)
+	e.ObserveMetric("web-01", 50, 10, 10)
 	waitFor(t, f, 2)
 	r := f.snapshot()[1]
 	if r.Firing || !strings.Contains(r.Title, "CPU on web-01 recovered") {
@@ -213,14 +213,43 @@ func TestObserveMetricThresholdDisabled(t *testing.T) {
 	e := NewEngine(d, config.Thresholds{CPUPercent: 0, MemPercent: 80})
 
 	// Huge CPU must never fire because threshold <= 0.
-	e.ObserveMetric("web-01", 100, 10)
+	e.ObserveMetric("web-01", 100, 10, 10)
 	stableCount(t, f, 0)
 
 	// Mem crossing still fires.
-	e.ObserveMetric("web-01", 100, 95)
+	e.ObserveMetric("web-01", 100, 95, 10)
 	waitFor(t, f, 1)
 	if f.snapshot()[0].Subject != "Memory" {
 		t.Errorf("expected only a Memory alert, got %+v", f.snapshot())
+	}
+}
+
+func TestObserveMetricDiskTransitions(t *testing.T) {
+	f := &fakeNotifier{}
+	d := NewDispatcher(f)
+	e := NewEngine(d, config.Thresholds{CPUPercent: 90, MemPercent: 90, DiskPercent: 90})
+
+	// Disk below threshold: nothing (CPU/mem also below).
+	e.ObserveMetric("web-01", 10, 10, 80)
+	stableCount(t, f, 0)
+
+	// Disk crosses above: one firing alert about Disk.
+	e.ObserveMetric("web-01", 10, 10, 95)
+	waitFor(t, f, 1)
+	a := f.snapshot()[0]
+	if !a.Firing || a.Subject != "Disk" || a.Kind != KindMetric {
+		t.Errorf("unexpected disk alert: %+v", a)
+	}
+
+	// Still above: dedup, nothing new.
+	e.ObserveMetric("web-01", 10, 10, 97)
+	stableCount(t, f, 1)
+
+	// Back below: recovery.
+	e.ObserveMetric("web-01", 10, 10, 40)
+	waitFor(t, f, 2)
+	if f.snapshot()[1].Firing {
+		t.Errorf("expected disk recovery, got %+v", f.snapshot()[1])
 	}
 }
 
@@ -378,7 +407,7 @@ func TestConcurrentObserveNoDeadlock(t *testing.T) {
 				}
 				e.ObserveCheck(node, name, "http", status, "d")
 				e.ObservePeer("peer", status)
-				e.ObserveMetric(node, float64(i%100), float64(i%100))
+				e.ObserveMetric(node, float64(i%100), float64(i%100), float64(i%100))
 			}
 		}(g)
 	}

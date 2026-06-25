@@ -140,12 +140,14 @@ func (e *Engine) ObservePeer(name, status string) {
 	e.fire(*alert)
 }
 
-// ObserveMetric evaluates CPU and Memory percentages independently against
-// their thresholds and dispatches alerts only on a crossing. A threshold <= 0
-// disables that metric entirely. Safe to call concurrently.
-func (e *Engine) ObserveMetric(node string, cpuPercent, memPercent float64) {
+// ObserveMetric evaluates CPU, Memory, and Disk percentages independently
+// against their thresholds and dispatches alerts only on a crossing. A
+// threshold <= 0 disables that metric entirely. diskPercent should be the
+// highest usage across the node's mounts. Safe to call concurrently.
+func (e *Engine) ObserveMetric(node string, cpuPercent, memPercent, diskPercent float64) {
 	e.evaluateMetric(node, "cpu", "CPU", cpuPercent, e.thresholds.CPUPercent)
 	e.evaluateMetric(node, "mem", "Memory", memPercent, e.thresholds.MemPercent)
+	e.evaluateMetric(node, "disk", "Disk", diskPercent, e.thresholds.DiskPercent)
 }
 
 // evaluateMetric handles a single metric's threshold crossing.
