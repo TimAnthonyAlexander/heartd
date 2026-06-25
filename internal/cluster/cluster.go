@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/timanthonyalexander/heartd/internal/alert"
 	"github.com/timanthonyalexander/heartd/internal/config"
 	"github.com/timanthonyalexander/heartd/internal/storage"
 )
@@ -55,10 +56,11 @@ type Poller struct {
 	interval     time.Duration
 	peers        []config.Peer
 	client       *http.Client
+	engine       *alert.Engine // optional; nil when alerting is disabled
 }
 
-// New builds a Poller for the configured peers.
-func New(db *storage.DB, selfName, advertiseURL string, interval time.Duration, peers []config.Peer) *Poller {
+// New builds a Poller for the configured peers. engine may be nil.
+func New(db *storage.DB, selfName, advertiseURL string, interval time.Duration, peers []config.Peer, engine *alert.Engine) *Poller {
 	return &Poller{
 		db:           db,
 		selfName:     selfName,
@@ -66,6 +68,7 @@ func New(db *storage.DB, selfName, advertiseURL string, interval time.Duration, 
 		interval:     interval,
 		peers:        peers,
 		client:       &http.Client{Timeout: 8 * time.Second},
+		engine:       engine,
 	}
 }
 
@@ -73,6 +76,7 @@ func New(db *storage.DB, selfName, advertiseURL string, interval time.Duration, 
 // peers once immediately and once per interval until ctx is cancelled.
 func (p *Poller) Run(ctx context.Context) {
 	p.seedPeers()
+	p.seedAlertState()
 	p.announceAll(ctx)
 	p.pollAll(ctx)
 
@@ -94,6 +98,22 @@ func (p *Poller) seedPeers() {
 		if err := p.db.UpsertPeer(storage.Peer{Name: peer.Name, URL: peer.URL, Secret: peer.Secret}); err != nil {
 			log.Printf("cluster: seed peer %q failed: %v", peer.Name, err)
 		}
+	}
+}
+
+// seedAlertState primes the alert engine with each peer's last persisted status
+// so a restart does not re-alert an already-down peer.
+func (p *Poller) seedAlertState() {
+	if p.engine == nil {
+		return
+	}
+	peers, err := p.db.ListPeers()
+	if err != nil {
+		log.Printf("cluster: seed alert state failed: %v", err)
+		return
+	}
+	for _, peer := range peers {
+		p.engine.SeedPeer(peer.Name, peer.Status)
 	}
 }
 
@@ -139,6 +159,9 @@ func (p *Poller) pollPeer(ctx context.Context, peer config.Peer) {
 	if err != nil {
 		// Preserve last-seen (zero time) and record the error as "down".
 		_ = p.db.SetPeerStatus(peer.Name, "down", time.Time{}, err.Error())
+		if p.engine != nil {
+			p.engine.ObservePeer(peer.Name, "down")
+		}
 		return
 	}
 
@@ -178,6 +201,9 @@ func (p *Poller) pollPeer(ctx context.Context, peer config.Peer) {
 	}
 
 	_ = p.db.SetPeerStatus(peer.Name, "ok", time.Now().UTC(), "")
+	if p.engine != nil {
+		p.engine.ObservePeer(peer.Name, "ok")
+	}
 }
 
 func (p *Poller) fetchMetrics(ctx context.Context, peer config.Peer) (peerMetrics, error) {

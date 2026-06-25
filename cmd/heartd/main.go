@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/timanthonyalexander/heartd/internal/alert"
 	"github.com/timanthonyalexander/heartd/internal/cluster"
 	"github.com/timanthonyalexander/heartd/internal/collector"
 	"github.com/timanthonyalexander/heartd/internal/config"
@@ -45,19 +46,23 @@ func run(configPath, addrOverride string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Build the alert engine from configured notification channels. nil when
+	// neither email nor webhook is configured, which disables alerting.
+	engine := buildAlertEngine(cfg)
+
 	// Start the metrics collection loop.
-	coll := collector.New(db, cfg.Server.Name, cfg.Server.MetricsInterval.Std(), cfg.Server.Retention.Std())
+	coll := collector.New(db, cfg.Server.Name, cfg.Server.MetricsInterval.Std(), cfg.Server.Retention.Std(), engine)
 	go coll.Run(ctx)
 
 	// Start the service-check scheduler.
 	if len(cfg.Checks) > 0 {
-		sched := scheduler.New(db, cfg.Server.Name, cfg.Checks)
+		sched := scheduler.New(db, cfg.Server.Name, cfg.Checks, engine)
 		go sched.Run(ctx)
 	}
 
 	// Start the cluster poller (announce + poll peers) when peers are configured.
 	if len(cfg.Peers) > 0 {
-		poller := cluster.New(db, cfg.Server.Name, cfg.Server.AdvertiseURL, cfg.Server.PeerPollInterval.Std(), cfg.Peers)
+		poller := cluster.New(db, cfg.Server.Name, cfg.Server.AdvertiseURL, cfg.Server.PeerPollInterval.Std(), cfg.Peers, engine)
 		go poller.Run(ctx)
 	}
 
@@ -98,4 +103,24 @@ func run(configPath, addrOverride string) error {
 		return fmt.Errorf("server error: %w", err)
 	}
 	return nil
+}
+
+// buildAlertEngine assembles the alert engine from configured notify channels.
+// Returns nil when no channel is configured (alerting disabled).
+func buildAlertEngine(cfg config.Config) *alert.Engine {
+	var notifiers []alert.Notifier
+	if cfg.Notify.Email != nil {
+		notifiers = append(notifiers, alert.NewEmailNotifier(*cfg.Notify.Email))
+	}
+	if cfg.Notify.Webhook != nil {
+		notifiers = append(notifiers, alert.NewWebhookNotifier(*cfg.Notify.Webhook))
+	}
+
+	dispatcher := alert.NewDispatcher(notifiers...)
+	if dispatcher.Empty() {
+		log.Printf("alerting disabled (no notify channels configured)")
+		return nil
+	}
+	log.Printf("alerting enabled (%d channel(s))", len(notifiers))
+	return alert.NewEngine(dispatcher, cfg.Thresholds)
 }

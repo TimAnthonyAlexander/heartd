@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/timanthonyalexander/heartd/internal/alert"
 	"github.com/timanthonyalexander/heartd/internal/metrics"
 	"github.com/timanthonyalexander/heartd/internal/storage"
 )
@@ -21,11 +22,12 @@ type Collector struct {
 	node      string
 	interval  time.Duration
 	retention time.Duration
+	engine    *alert.Engine // optional; nil when alerting is disabled
 }
 
-// New builds a Collector for the local node.
-func New(db *storage.DB, node string, interval, retention time.Duration) *Collector {
-	return &Collector{db: db, node: node, interval: interval, retention: retention}
+// New builds a Collector for the local node. engine may be nil.
+func New(db *storage.DB, node string, interval, retention time.Duration, engine *alert.Engine) *Collector {
+	return &Collector{db: db, node: node, interval: interval, retention: retention, engine: engine}
 }
 
 // Run samples immediately, then once per interval until ctx is cancelled.
@@ -72,6 +74,10 @@ func (c *Collector) sampleOnce(ctx context.Context) {
 	}
 	if err := c.db.InsertMetric(sample); err != nil {
 		log.Printf("collector: insert failed: %v", err)
+	}
+
+	if c.engine != nil {
+		c.engine.ObserveMetric(c.node, snap.CPUPercent, snap.MemPercent)
 	}
 }
 
