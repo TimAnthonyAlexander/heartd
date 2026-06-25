@@ -18,6 +18,8 @@ interface Props {
   rangeMinutes: number
   onRangeChange: (minutes: number) => void
   onMenu?: () => void
+  username?: string | null
+  onLogout?: () => void
 }
 
 function useAgo(ts: number | null): string {
@@ -41,6 +43,8 @@ export function TopBar({
   rangeMinutes,
   onRangeChange,
   onMenu,
+  username,
+  onLogout,
 }: Props) {
   const ago = useAgo(lastUpdated)
   const fresh = lastUpdated != null && Date.now() - lastUpdated < 6000
@@ -120,6 +124,19 @@ export function TopBar({
           </ToggleButton>
         ))}
       </ToggleButtonGroup>
+
+      {onLogout && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, ml: 1, pl: 1.5, borderLeft: `1px solid ${colors.border}` }}>
+          {username && (
+            <Typography sx={{ fontSize: 13, color: colors.textDim, mr: 0.5 }}>{username}</Typography>
+          )}
+          <Tooltip title="Sign out">
+            <IconButton size="small" onClick={onLogout} sx={{ color: colors.textDim }}>
+              <LogoutIcon />
+            </IconButton>
+          </Tooltip>
+        </Box>
+      )}
     </Box>
   )
 }
@@ -146,6 +163,15 @@ function MenuIcon() {
       <rect x="3" y="6" width="18" height="2" rx="1" />
       <rect x="3" y="11" width="18" height="2" rx="1" />
       <rect x="3" y="16" width="18" height="2" rx="1" />
+    </svg>
+  )
+}
+function LogoutIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" y1="12" x2="9" y2="12" />
     </svg>
   )
 }

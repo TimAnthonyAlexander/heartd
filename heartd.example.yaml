@@ -17,11 +17,10 @@ server:
   advertise_url: http://web-01.internal:9300
   peer_poll_interval: 15s   # how often configured peers are polled
 
-  # Optional HTTP basic auth for the dashboard. Only needed if the port is
-  # exposed publicly; omit for a private network / behind a firewall.
-  # basic_auth:
-  #   username: admin
-  #   password: change-me
+# Authentication is built in and always on: on first launch the dashboard prompts
+# you to create an admin account, and the API returns nothing until you sign in.
+# No auth configuration is needed here. (For public exposure, terminate TLS at a
+# reverse proxy — heartd serves plain HTTP.)
 
 # System-metric alert thresholds, in percent. An alert fires when a value first
 # crosses its threshold and again when it recovers. Set to 0 to disable a metric.

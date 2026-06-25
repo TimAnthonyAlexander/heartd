@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/timanthonyalexander/heartd/internal/alert"
+	"github.com/timanthonyalexander/heartd/internal/auth"
 	"github.com/timanthonyalexander/heartd/internal/cluster"
 	"github.com/timanthonyalexander/heartd/internal/collector"
 	"github.com/timanthonyalexander/heartd/internal/config"
@@ -76,10 +77,15 @@ func run(configPath, addrOverride string) error {
 		peerSecrets = append(peerSecrets, p.Secret)
 	}
 
+	// Authentication service + periodic expired-session cleanup.
+	authSvc := auth.NewService(db)
+	go pruneSessions(ctx, authSvc)
+
 	handler := server.New(server.Config{
 		NodeName:    cfg.Server.Name,
 		DB:          db,
 		Checks:      cfg.Checks,
+		Auth:        authSvc,
 		PeerSecrets: peerSecrets,
 	})
 	srv := &http.Server{
@@ -103,6 +109,21 @@ func run(configPath, addrOverride string) error {
 		return fmt.Errorf("server error: %w", err)
 	}
 	return nil
+}
+
+// pruneSessions removes expired login sessions hourly until ctx is cancelled.
+func pruneSessions(ctx context.Context, a *auth.Service) {
+	_ = a.PruneExpired()
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_ = a.PruneExpired()
+		}
+	}
 }
 
 // buildAlertEngine assembles the alert engine from configured notify channels.

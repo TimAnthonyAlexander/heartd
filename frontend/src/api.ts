@@ -35,12 +35,58 @@ export interface Check {
   last_checked: string
 }
 
+// Registered by the auth gate; invoked whenever a request is rejected with 401
+// so the app can drop back to the login screen.
+let unauthorizedHandler: (() => void) | null = null
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  unauthorizedHandler = fn
+}
+
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, { signal })
+  if (res.status === 401) {
+    unauthorizedHandler?.()
+    throw new Error('unauthorized')
+  }
   if (!res.ok) {
     throw new Error(`request failed: ${res.status}`)
   }
   return (await res.json()) as T
+}
+
+async function postJSON<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error((data as { error?: string }).error || `request failed: ${res.status}`)
+  }
+  return data as T
+}
+
+export interface AuthStatus {
+  initialized: boolean
+  authenticated: boolean
+  username?: string
+}
+
+export function fetchAuthStatus(): Promise<AuthStatus> {
+  return getJSON<AuthStatus>('/api/auth/status')
+}
+
+export function authInit(username: string, password: string): Promise<{ username: string }> {
+  return postJSON('/api/auth/init', { username, password })
+}
+
+export function authLogin(username: string, password: string): Promise<{ username: string }> {
+  return postJSON('/api/auth/login', { username, password })
+}
+
+export function authLogout(): Promise<{ status: string }> {
+  return postJSON('/api/auth/logout', {})
 }
 
 export function fetchNodes(signal?: AbortSignal): Promise<Node[]> {

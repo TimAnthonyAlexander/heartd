@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/timanthonyalexander/heartd/internal/auth"
 	"github.com/timanthonyalexander/heartd/internal/cluster"
 	"github.com/timanthonyalexander/heartd/internal/config"
 	"github.com/timanthonyalexander/heartd/internal/metrics"
@@ -16,11 +18,15 @@ import (
 	"github.com/timanthonyalexander/heartd/internal/web"
 )
 
+// sessionCookie is the name of the HttpOnly session cookie.
+const sessionCookie = "heartd_session"
+
 // Config holds runtime settings for the server.
 type Config struct {
 	NodeName string
 	DB       *storage.DB
 	Checks   []config.Check
+	Auth     *auth.Service
 	// PeerSecrets are the shared secrets this node accepts on node-to-node
 	// requests (typically the secrets of its configured peers).
 	PeerSecrets []string
@@ -32,14 +38,24 @@ func New(cfg Config) http.Handler {
 	s := &server{cfg: cfg}
 	mux := http.NewServeMux()
 
+	// Public: liveness and the auth flow (you must reach these unauthenticated).
 	mux.HandleFunc("GET /api/health", s.handleHealth)
-	mux.HandleFunc("GET /api/nodes", s.handleNodes)
-	mux.HandleFunc("GET /api/nodes/{name}/metrics", s.handleMetrics)
-	mux.HandleFunc("GET /api/nodes/{name}/metrics/history", s.handleHistory)
-	mux.HandleFunc("GET /api/nodes/{name}/checks", s.handleChecks)
-	mux.HandleFunc("GET /api/nodes/{name}/disk", s.handleDisk)
-	mux.HandleFunc("GET /api/nodes/{name}/network", s.handleNetwork)
-	mux.HandleFunc("GET /api/nodes/{name}/network/history", s.handleNetworkHistory)
+	mux.HandleFunc("GET /api/auth/status", s.handleAuthStatus)
+	mux.HandleFunc("POST /api/auth/init", s.handleAuthInit)
+	mux.HandleFunc("POST /api/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("POST /api/auth/logout", s.handleAuthLogout)
+
+	// Protected: every data endpoint requires a valid session.
+	protect := func(pattern string, h http.HandlerFunc) {
+		mux.Handle(pattern, s.requireAuth(h))
+	}
+	protect("GET /api/nodes", s.handleNodes)
+	protect("GET /api/nodes/{name}/metrics", s.handleMetrics)
+	protect("GET /api/nodes/{name}/metrics/history", s.handleHistory)
+	protect("GET /api/nodes/{name}/checks", s.handleChecks)
+	protect("GET /api/nodes/{name}/disk", s.handleDisk)
+	protect("GET /api/nodes/{name}/network", s.handleNetwork)
+	protect("GET /api/nodes/{name}/network/history", s.handleNetworkHistory)
 
 	// Node-to-node endpoints, protected by the shared secret.
 	mux.Handle("POST /api/peer/announce", s.requireSecret(http.HandlerFunc(s.handlePeerAnnounce)))
@@ -364,6 +380,138 @@ func (s *server) handlePeerNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, n)
+}
+
+// --- Authentication ---
+
+type authStatusResp struct {
+	Initialized   bool   `json:"initialized"`
+	Authenticated bool   `json:"authenticated"`
+	Username      string `json:"username,omitempty"`
+}
+
+type credentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+func (s *server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
+	initialized, err := s.cfg.Auth.Initialized()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	resp := authStatusResp{Initialized: initialized}
+	if user, ok := s.currentUser(r); ok {
+		resp.Authenticated = true
+		resp.Username = user.Username
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *server) handleAuthInit(w http.ResponseWriter, r *http.Request) {
+	creds, ok := decodeCredentials(w, r)
+	if !ok {
+		return
+	}
+	user, token, err := s.cfg.Auth.CreateFirstUser(creds.Username, creds.Password)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrAlreadyInitialized):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "already initialized"})
+		case errors.Is(err, auth.ErrWeakPassword):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password must be at least 8 characters"})
+		case errors.Is(err, auth.ErrInvalidUsername):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username is required"})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not create user"})
+		}
+		return
+	}
+	s.setSessionCookie(w, token)
+	writeJSON(w, http.StatusOK, map[string]string{"username": user.Username})
+}
+
+func (s *server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	creds, ok := decodeCredentials(w, r)
+	if !ok {
+		return
+	}
+	user, token, err := s.cfg.Auth.Login(creds.Username, creds.Password)
+	if err != nil {
+		if errors.Is(err, auth.ErrInvalidCredentials) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid username or password"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "login failed"})
+		return
+	}
+	s.setSessionCookie(w, token)
+	writeJSON(w, http.StatusOK, map[string]string{"username": user.Username})
+}
+
+func (s *server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		_ = s.cfg.Auth.Logout(c.Value)
+	}
+	s.clearSessionCookie(w)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// requireAuth wraps a handler so it only runs for a request with a valid
+// session. Otherwise it returns 401 and reveals nothing.
+func (s *server) requireAuth(next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := s.currentUser(r); !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// currentUser resolves the session cookie to a user, if valid.
+func (s *server) currentUser(r *http.Request) (auth.User, bool) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return auth.User{}, false
+	}
+	user, ok, err := s.cfg.Auth.UserForSession(c.Value)
+	if err != nil || !ok {
+		return auth.User{}, false
+	}
+	return user, true
+}
+
+func decodeCredentials(w http.ResponseWriter, r *http.Request) (credentials, bool) {
+	var creds credentials
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&creds); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return credentials{}, false
+	}
+	return creds, true
+}
+
+func (s *server) setSessionCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookie,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(auth.SessionTTL / time.Second),
+	})
+}
+
+func (s *server) clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookie,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
 }
 
 // requireSecret wraps a handler so it only runs when the request carries a

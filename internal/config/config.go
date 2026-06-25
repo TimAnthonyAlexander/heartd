@@ -99,18 +99,11 @@ type Config struct {
 type Server struct {
 	Name            string     `yaml:"name"`             // node name; default = os.Hostname() or "heartd"
 	Port            int        `yaml:"port"`             // default 9300
-	BasicAuth       *BasicAuth `yaml:"basic_auth"`       // optional, nil when absent
 	MetricsInterval Duration   `yaml:"metrics_interval"` // how often to sample metrics; default 30s
 	Retention       Duration   `yaml:"retention"`        // rolling metric retention window; default 7 days (168h)
 	DBPath          string     `yaml:"db_path"`          // sqlite file path; default "heartd.db"
 	AdvertiseURL    string     `yaml:"advertise_url"`    // how peers should reach this node (optional)
 	PeerPollInterval Duration  `yaml:"peer_poll_interval"` // how often to poll peers; default 15s
-}
-
-// BasicAuth holds optional HTTP basic auth credentials for the dashboard.
-type BasicAuth struct {
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
 }
 
 // Peer describes another heartd node.
@@ -290,15 +283,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Server.PeerPollInterval.Std() <= 0 {
 		return fmt.Errorf("server.peer_poll_interval must be greater than 0")
-	}
-
-	if c.Server.BasicAuth != nil {
-		if c.Server.BasicAuth.Username == "" {
-			return fmt.Errorf("server.basic_auth.username must not be empty")
-		}
-		if c.Server.BasicAuth.Password == "" {
-			return fmt.Errorf("server.basic_auth.password must not be empty")
-		}
 	}
 
 	if err := validateThreshold("thresholds.cpu_percent", c.Thresholds.CPUPercent); err != nil {

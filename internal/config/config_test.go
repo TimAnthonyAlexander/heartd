@@ -85,9 +85,6 @@ server:
   metrics_interval: 15s
   retention: 3d
   db_path: /var/lib/heartd.db
-  basic_auth:
-    username: admin
-    password: secret
 peers:
   - name: db-1
     url: http://db-1:9300
@@ -142,9 +139,6 @@ notify:
 	}
 	if cfg.Server.Retention.Std() != 3*24*time.Hour {
 		t.Errorf("Retention = %v, want 72h", cfg.Server.Retention.Std())
-	}
-	if cfg.Server.BasicAuth == nil || cfg.Server.BasicAuth.Username != "admin" {
-		t.Errorf("BasicAuth not parsed: %+v", cfg.Server.BasicAuth)
 	}
 	if len(cfg.Peers) != 1 || cfg.Peers[0].Name != "db-1" {
 		t.Errorf("Peers not parsed: %+v", cfg.Peers)
@@ -238,8 +232,8 @@ func TestValidationFailures(t *testing.T) {
 			yaml: "checks:\n  - type: shell\n    interval: 1m\n    command: ls\n",
 		},
 		{
-			name: "basic auth missing password",
-			yaml: "server:\n  basic_auth:\n    username: admin\n",
+			name: "unknown field rejected",
+			yaml: "server:\n  bogus_field: 1\n",
 		},
 		{
 			name: "zero interval check",

@@ -53,7 +53,7 @@ Sections:
 
 | Section | Purpose |
 |---|---|
-| `server` | node name, port, sample interval, retention, db path, peer settings, optional basic auth |
+| `server` | node name, port, sample interval, retention, db path, peer settings |
 | `thresholds` | CPU / memory / disk alert thresholds (percent) |
 | `peers` | other heartd nodes (name + URL + shared secret) |
 | `checks` | service checks (`http` / `tcp` / `process` / `shell`) |
@@ -61,6 +61,20 @@ Sections:
 
 Durations accept Go units plus a `d` (days) suffix: `30s`, `5m`, `1h`, `7d`.
 Configuration is read at startup; restart heartd to apply changes.
+
+## Authentication
+
+The dashboard and its API require a login. On first launch heartd is
+*uninitialized* — the dashboard prompts you to **create the first admin account**.
+After that, every data endpoint returns `401` until you sign in; sessions are
+HttpOnly cookies stored server-side in SQLite. Every user is an admin.
+
+Node-to-node traffic (`/api/peer/*`) is authenticated separately by the per-peer
+shared secret, not by user login, so clustering works without any accounts on the
+peer. `GET /api/health` stays public as a liveness probe (it returns no data).
+
+heartd serves plain HTTP; put it behind a TLS-terminating reverse proxy if the
+port is reachable from untrusted networks.
 
 ## Multi-node
 

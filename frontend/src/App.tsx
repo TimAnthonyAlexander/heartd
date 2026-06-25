@@ -15,7 +15,12 @@ function formatGB(bytes: number): string {
   return (bytes / 1024 ** 3).toFixed(1)
 }
 
-export default function App() {
+interface AppProps {
+  username: string | null
+  onLogout: () => void
+}
+
+export default function App({ username, onLogout }: AppProps) {
   const { nodes, cpuByNode, summary, ready } = useCluster()
   const { node: selected, select, replace } = useHashNode()
   const [rangeMinutes, setRangeMinutes] = useState(60)
@@ -72,6 +77,8 @@ export default function App() {
           rangeMinutes={rangeMinutes}
           onRangeChange={setRangeMinutes}
           onMenu={isMobile ? () => setDrawerOpen(true) : undefined}
+          username={username}
+          onLogout={onLogout}
         />
 
         <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 1280, mx: 'auto' }}>

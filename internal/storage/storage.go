@@ -75,6 +75,19 @@ CREATE TABLE IF NOT EXISTS net_sample (
     at         INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_net_sample_node_at ON net_sample(node, at);
+CREATE TABLE IF NOT EXISTS user (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session (
+    token      TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_session_expires ON session(expires_at);
 `
 
 // Open opens (creating if needed) the SQLite database at path and ensures the
