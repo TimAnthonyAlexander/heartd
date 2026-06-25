@@ -1,0 +1,49 @@
+# heartd configuration. Copy to heartd.yaml next to the binary and edit.
+# All sections are optional; sensible defaults are applied for anything omitted.
+
+server:
+  name: web-01            # node name shown in the dashboard (default: hostname)
+  port: 9300              # HTTP port for API + dashboard
+  metrics_interval: 30s   # how often system metrics are sampled
+  retention: 7d           # how long samples are kept (rolling window)
+  db_path: heartd.db      # SQLite database file
+  # basic_auth:           # optional; only needed if the port is public
+  #   username: admin
+  #   password: change-me
+
+# System-metric alert thresholds (percent). Used by the alerting wave.
+thresholds:
+  cpu_percent: 90
+  mem_percent: 90
+  disk_percent: 90
+
+# --- The sections below are defined but not yet wired (upcoming waves) ---
+
+# peers:
+#   - name: db-01
+#     url: http://10.0.0.5:9300
+#     secret: shared-secret-here
+
+# checks:
+#   - name: API health
+#     type: http
+#     url: https://example.com/health
+#     interval: 30s
+#     timeout: 5s
+#   - name: Postgres
+#     type: tcp
+#     host: 127.0.0.1
+#     port: 5432
+#     interval: 30s
+
+# notify:
+#   webhook:
+#     url: https://hooks.slack.com/services/XXX/YYY/ZZZ
+#   email:
+#     smtp_host: smtp.example.com
+#     smtp_port: 587
+#     username: alerts@example.com
+#     password: change-me
+#     from: alerts@example.com
+#     to: [ops@example.com]
+#     subject_prefix: "[heartd]"
