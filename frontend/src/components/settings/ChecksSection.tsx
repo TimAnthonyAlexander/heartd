@@ -7,6 +7,7 @@ import { Section, formatInterval } from './shared'
 import { CheckForm } from './CheckForm'
 
 interface Props {
+  nodeName: string
   checks: CheckConfig[]
   onChange: (checks: CheckConfig[]) => void
 }
@@ -27,7 +28,7 @@ function checkParam(c: CheckConfig): string {
   }
 }
 
-export function ChecksSection({ checks, onChange }: Props) {
+export function ChecksSection({ nodeName, checks, onChange }: Props) {
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<CheckConfig | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -49,10 +50,10 @@ export function ChecksSection({ checks, onChange }: Props) {
     setError(null)
     if (check.id === 0) {
       const { id: _id, ...payload } = check
-      const created = await createCheck(payload)
+      const created = await createCheck(nodeName, payload)
       onChange([...checks, created])
     } else {
-      await updateCheck(check)
+      await updateCheck(nodeName, check)
       onChange(checks.map((c) => (c.id === check.id ? check : c)))
     }
     setFormOpen(false)
@@ -63,7 +64,7 @@ export function ChecksSection({ checks, onChange }: Props) {
     setPendingToggle(c.id)
     const next = { ...c, enabled }
     try {
-      await updateCheck(next)
+      await updateCheck(nodeName, next)
       onChange(checks.map((x) => (x.id === c.id ? next : x)))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Update failed')
@@ -76,7 +77,7 @@ export function ChecksSection({ checks, onChange }: Props) {
     if (!window.confirm(`Delete check "${c.name}"? This cannot be undone.`)) return
     setError(null)
     try {
-      await deleteCheck(c.id)
+      await deleteCheck(nodeName, c.id)
       onChange(checks.filter((x) => x.id !== c.id))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Delete failed')

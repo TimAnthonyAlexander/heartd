@@ -6,6 +6,7 @@ import { colors } from '../../theme'
 import { FeedbackText, SaveButton, Section, type Feedback } from './shared'
 
 interface Props {
+  nodeName: string
   initial: NotifySettings
   onSaved: (n: NotifySettings) => void
 }
@@ -30,7 +31,7 @@ function fromEmailForm(f: EmailForm): EmailNotify {
   }
 }
 
-export function NotifySection({ initial, onSaved }: Props) {
+export function NotifySection({ nodeName, initial, onSaved }: Props) {
   const [webhook, setWebhook] = useState<WebhookNotify>(initial.webhook)
   const [email, setEmail] = useState<EmailForm>(toEmailForm(initial.email))
   const [feedback, setFeedback] = useState<Feedback>('idle')
@@ -51,7 +52,7 @@ export function NotifySection({ initial, onSaved }: Props) {
   const save = async () => {
     setFeedback('saving')
     try {
-      const saved = await updateNotify(current())
+      const saved = await updateNotify(nodeName, current())
       setWebhook(saved.webhook)
       setEmail(toEmailForm(saved.email))
       onSaved(saved)
@@ -66,7 +67,7 @@ export function NotifySection({ initial, onSaved }: Props) {
     setTestResult(null)
     setTestError(null)
     try {
-      const result = await testNotify(current())
+      const result = await testNotify(nodeName, current())
       setTestResult(result)
     } catch (err) {
       setTestError(err instanceof Error ? err.message : 'Test failed')

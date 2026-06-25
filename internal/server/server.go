@@ -2,10 +2,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -35,7 +37,10 @@ type Config struct {
 // New builds the root HTTP handler: REST API under /api and the embedded
 // dashboard for everything else.
 func New(cfg Config) http.Handler {
-	s := &server{cfg: cfg}
+	s := &server{
+		cfg:         cfg,
+		proxyClient: &http.Client{Timeout: 15 * time.Second},
+	}
 	mux := http.NewServeMux()
 
 	// Public: liveness and the auth flow (you must reach these unauthenticated).
@@ -57,14 +62,17 @@ func New(cfg Config) http.Handler {
 	protect("GET /api/nodes/{name}/network", s.handleNetwork)
 	protect("GET /api/nodes/{name}/network/history", s.handleNetworkHistory)
 
-	// Runtime configuration (admin).
-	protect("GET /api/settings", s.handleGetSettings)
-	protect("PUT /api/settings/general", s.handlePutGeneral)
-	protect("PUT /api/settings/notify", s.handlePutNotify)
-	protect("POST /api/settings/notify/test", s.handleTestNotify)
-	protect("POST /api/settings/checks", s.handleCreateCheck)
-	protect("PUT /api/settings/checks/{id}", s.handleUpdateCheck)
-	protect("DELETE /api/settings/checks/{id}", s.handleDeleteCheck)
+	// Runtime configuration, addressed per node. For the local node these operate
+	// on its own settings service; for a peer they proxy the same request to that
+	// peer's /api/peer/settings/* over the shared-secret link, so each node owns
+	// its own config but is editable from any dashboard.
+	protect("GET /api/nodes/{name}/settings", s.dispatchNode(s.handleGetSettings, "/api/peer/settings"))
+	protect("PUT /api/nodes/{name}/settings/general", s.dispatchNode(s.handlePutGeneral, "/api/peer/settings/general"))
+	protect("PUT /api/nodes/{name}/settings/notify", s.dispatchNode(s.handlePutNotify, "/api/peer/settings/notify"))
+	protect("POST /api/nodes/{name}/settings/notify/test", s.dispatchNode(s.handleTestNotify, "/api/peer/settings/notify/test"))
+	protect("POST /api/nodes/{name}/settings/checks", s.dispatchNode(s.handleCreateCheck, "/api/peer/settings/checks"))
+	protect("PUT /api/nodes/{name}/settings/checks/{id}", s.dispatchNode(s.handleUpdateCheck, "/api/peer/settings/checks"))
+	protect("DELETE /api/nodes/{name}/settings/checks/{id}", s.dispatchNode(s.handleDeleteCheck, "/api/peer/settings/checks"))
 
 	// Node-to-node endpoints, protected by the shared secret.
 	mux.Handle("POST /api/peer/announce", s.requireSecret(http.HandlerFunc(s.handlePeerAnnounce)))
@@ -72,6 +80,16 @@ func New(cfg Config) http.Handler {
 	mux.Handle("GET /api/peer/checks", s.requireSecret(http.HandlerFunc(s.handlePeerChecks)))
 	mux.Handle("GET /api/peer/disk", s.requireSecret(http.HandlerFunc(s.handlePeerDisk)))
 	mux.Handle("GET /api/peer/network", s.requireSecret(http.HandlerFunc(s.handlePeerNetwork)))
+
+	// Node-to-node settings: the receive side of the proxy above. Same handlers
+	// the local node uses, operating on THIS node's own settings service.
+	mux.Handle("GET /api/peer/settings", s.requireSecret(http.HandlerFunc(s.handleGetSettings)))
+	mux.Handle("PUT /api/peer/settings/general", s.requireSecret(http.HandlerFunc(s.handlePutGeneral)))
+	mux.Handle("PUT /api/peer/settings/notify", s.requireSecret(http.HandlerFunc(s.handlePutNotify)))
+	mux.Handle("POST /api/peer/settings/notify/test", s.requireSecret(http.HandlerFunc(s.handleTestNotify)))
+	mux.Handle("POST /api/peer/settings/checks", s.requireSecret(http.HandlerFunc(s.handleCreateCheck)))
+	mux.Handle("PUT /api/peer/settings/checks/{id}", s.requireSecret(http.HandlerFunc(s.handleUpdateCheck)))
+	mux.Handle("DELETE /api/peer/settings/checks/{id}", s.requireSecret(http.HandlerFunc(s.handleDeleteCheck)))
 
 	// Unknown API paths return JSON 404 rather than falling through to the
 	// SPA handler (which would serve index.html with a 200).
@@ -84,7 +102,87 @@ func New(cfg Config) http.Handler {
 }
 
 type server struct {
-	cfg Config
+	cfg         Config
+	proxyClient *http.Client
+}
+
+// dispatchNode routes a per-node settings request: if {name} is the local node,
+// the local handler runs against this node's own settings service; otherwise the
+// request is proxied to that peer's corresponding /api/peer/settings path. When a
+// {id} path value is present (check update/delete) it is appended to peerPath.
+func (s *server) dispatchNode(local http.HandlerFunc, peerPath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("name") == s.cfg.NodeName {
+			local(w, r)
+			return
+		}
+		path := peerPath
+		if id := r.PathValue("id"); id != "" {
+			path = peerPath + "/" + id
+		}
+		s.proxyToPeer(w, r, path)
+	}
+}
+
+// proxyToPeer forwards the current request (method + body) to the named peer's
+// path, attaching the shared secret, and streams the peer's response back. The
+// peer name comes from the {name} path value.
+func (s *server) proxyToPeer(w http.ResponseWriter, r *http.Request, path string) {
+	name := r.PathValue("name")
+	peer, ok, err := s.peerByName(name)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown node"})
+		return
+	}
+	if peer.URL == "" || peer.Secret == "" {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "peer is not configured for remote edits (missing url or shared secret)"})
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 14*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, r.Method, peer.URL+path, bytes.NewReader(body))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(cluster.SecretHeader, peer.Secret)
+
+	resp, err := s.proxyClient.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "peer unreachable: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
+// peerByName looks up a configured peer's connection details by name.
+func (s *server) peerByName(name string) (storage.Peer, bool, error) {
+	peers, err := s.cfg.DB.ListPeers()
+	if err != nil {
+		return storage.Peer{}, false, err
+	}
+	for _, p := range peers {
+		if p.Name == name {
+			return p, true, nil
+		}
+	}
+	return storage.Peer{}, false, nil
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {

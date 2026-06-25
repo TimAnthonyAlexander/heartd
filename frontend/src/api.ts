@@ -228,30 +228,39 @@ export interface AllSettings {
   checks: CheckConfig[]
 }
 
-export function fetchSettings(): Promise<AllSettings> {
-  return getJSON<AllSettings>('/api/settings')
+// Settings are addressed per node. For the local node the backend edits its own
+// config; for a peer it proxies the write over the shared-secret peer link. So
+// every node's config is editable from any dashboard, while each node still owns
+// its own copy (and keeps alerting even when its peers are down).
+
+function settingsBase(nodeName: string): string {
+  return `/api/nodes/${encodeURIComponent(nodeName)}/settings`
 }
 
-export function updateGeneral(g: GeneralSettings): Promise<GeneralSettings> {
-  return putJSON<GeneralSettings>('/api/settings/general', g)
+export function fetchSettings(nodeName: string, signal?: AbortSignal): Promise<AllSettings> {
+  return getJSON<AllSettings>(settingsBase(nodeName), signal)
 }
 
-export function updateNotify(n: NotifySettings): Promise<NotifySettings> {
-  return putJSON<NotifySettings>('/api/settings/notify', n)
+export function updateGeneral(nodeName: string, g: GeneralSettings): Promise<GeneralSettings> {
+  return putJSON<GeneralSettings>(`${settingsBase(nodeName)}/general`, g)
 }
 
-export function createCheck(c: Omit<CheckConfig, 'id'>): Promise<CheckConfig> {
-  return postJSON<CheckConfig>('/api/settings/checks', c)
+export function updateNotify(nodeName: string, n: NotifySettings): Promise<NotifySettings> {
+  return putJSON<NotifySettings>(`${settingsBase(nodeName)}/notify`, n)
 }
 
-export function updateCheck(c: CheckConfig): Promise<{ status: string }> {
-  return putJSON<{ status: string }>(`/api/settings/checks/${c.id}`, c)
+export function createCheck(nodeName: string, c: Omit<CheckConfig, 'id'>): Promise<CheckConfig> {
+  return postJSON<CheckConfig>(`${settingsBase(nodeName)}/checks`, c)
 }
 
-export function deleteCheck(id: number): Promise<{ status: string }> {
-  return delJSON<{ status: string }>(`/api/settings/checks/${id}`)
+export function updateCheck(nodeName: string, c: CheckConfig): Promise<{ status: string }> {
+  return putJSON<{ status: string }>(`${settingsBase(nodeName)}/checks/${c.id}`, c)
 }
 
-export function testNotify(n: NotifySettings): Promise<Record<string, string>> {
-  return postJSON<Record<string, string>>('/api/settings/notify/test', n)
+export function deleteCheck(nodeName: string, id: number): Promise<{ status: string }> {
+  return delJSON<{ status: string }>(`${settingsBase(nodeName)}/checks/${id}`)
+}
+
+export function testNotify(nodeName: string, n: NotifySettings): Promise<Record<string, string>> {
+  return postJSON<Record<string, string>>(`${settingsBase(nodeName)}/notify/test`, n)
 }

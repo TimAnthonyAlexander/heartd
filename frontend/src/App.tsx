@@ -1,15 +1,26 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { Box, Drawer, Skeleton, useMediaQuery } from '@mui/material'
+import { Box, Drawer, Skeleton, Tab, Tabs, useMediaQuery } from '@mui/material'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { MetricPanel } from './components/MetricPanel'
 import { DiskPanel } from './components/DiskPanel'
 import { NetworkPanel } from './components/NetworkPanel'
 import { ChecksTable } from './components/ChecksTable'
+import { NodeConfig, type ConfigTab } from './components/NodeConfig'
 import { useCluster } from './hooks/useCluster'
 import { useNodeData } from './hooks/useNodeData'
 import { colors, theme } from './theme'
+
+type NodeTab = 'dashboard' | ConfigTab
+
+const TABS: { value: NodeTab; label: string }[] = [
+  { value: 'dashboard', label: 'Dashboard' },
+  { value: 'checks', label: 'Checks' },
+  { value: 'notifications', label: 'Notifications' },
+  { value: 'alerts', label: 'Alerts' },
+  { value: 'settings', label: 'Settings' },
+]
 
 function formatGB(bytes: number): string {
   return (bytes / 1024 ** 3).toFixed(1)
@@ -28,6 +39,7 @@ export default function App({ username, onLogout }: AppProps) {
   const [rangeMinutes, setRangeMinutes] = useState(60)
   const [paused, setPaused] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [tab, setTab] = useState<NodeTab>('dashboard')
 
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
   const data = useNodeData(selected, rangeMinutes, paused)
@@ -84,60 +96,86 @@ export default function App({ username, onLogout }: AppProps) {
           onSettings={() => navigate('/settings')}
         />
 
-        <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 1280, mx: 'auto' }}>
-          {data.unreachable && (
-            <Box
-              sx={{
-                mb: 3,
-                px: 2.5,
-                py: 1.5,
-                borderRadius: 2,
-                border: `1px solid ${colors.error}55`,
-                bgcolor: `${colors.error}14`,
-                color: colors.error,
-                fontSize: 14,
-              }}
+        <Box sx={{ px: { xs: 2, md: 4 }, borderBottom: `1px solid ${colors.border}` }}>
+          <Box sx={{ maxWidth: 1280, mx: 'auto' }}>
+            <Tabs
+              value={tab}
+              onChange={(_, v: NodeTab) => setTab(v)}
+              variant="scrollable"
+              scrollButtons="auto"
+              sx={{ minHeight: 44, '& .MuiTab-root': { minHeight: 44, textTransform: 'none', fontSize: 14 } }}
             >
-              {selected} is unreachable — showing last known values.
-            </Box>
-          )}
-
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-              gap: 2.5,
-              mb: 4,
-            }}
-          >
-            {data.loading && !m ? (
-              <>
-                <PanelSkeleton />
-                <PanelSkeleton />
-              </>
-            ) : m ? (
-              <>
-                <MetricPanel
-                  title="CPU"
-                  headline={`${m.cpu_percent.toFixed(1)}%`}
-                  percent={m.cpu_percent}
-                  data={data.series.map((p) => ({ t: p.t, v: p.cpu }))}
-                  dimmed={data.unreachable}
-                />
-                <MetricPanel
-                  title="Memory"
-                  headline={`${formatGB(m.mem_used)} / ${formatGB(m.mem_total)} GB`}
-                  percent={m.mem_percent}
-                  data={data.series.map((p) => ({ t: p.t, v: p.memPct }))}
-                  dimmed={data.unreachable}
-                />
-              </>
-            ) : null}
-            <DiskPanel disks={data.disk} dimmed={data.unreachable} />
-            <NetworkPanel net={data.net} series={data.netSeries} dimmed={data.unreachable} />
+              {TABS.map((t) => (
+                <Tab key={t.value} value={t.value} label={t.label} />
+              ))}
+            </Tabs>
           </Box>
+        </Box>
 
-          <ChecksTable checks={data.checks} />
+        <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 1280, mx: 'auto' }}>
+          {tab === 'dashboard' ? (
+            <>
+              {data.unreachable && (
+                <Box
+                  sx={{
+                    mb: 3,
+                    px: 2.5,
+                    py: 1.5,
+                    borderRadius: 2,
+                    border: `1px solid ${colors.error}55`,
+                    bgcolor: `${colors.error}14`,
+                    color: colors.error,
+                    fontSize: 14,
+                  }}
+                >
+                  {selected} is unreachable — showing last known values.
+                </Box>
+              )}
+
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+                  gap: 2.5,
+                  mb: 4,
+                }}
+              >
+                {data.loading && !m ? (
+                  <>
+                    <PanelSkeleton />
+                    <PanelSkeleton />
+                  </>
+                ) : m ? (
+                  <>
+                    <MetricPanel
+                      title="CPU"
+                      headline={`${m.cpu_percent.toFixed(1)}%`}
+                      percent={m.cpu_percent}
+                      data={data.series.map((p) => ({ t: p.t, v: p.cpu }))}
+                      dimmed={data.unreachable}
+                    />
+                    <MetricPanel
+                      title="Memory"
+                      headline={`${formatGB(m.mem_used)} / ${formatGB(m.mem_total)} GB`}
+                      percent={m.mem_percent}
+                      data={data.series.map((p) => ({ t: p.t, v: p.memPct }))}
+                      dimmed={data.unreachable}
+                    />
+                  </>
+                ) : null}
+                <DiskPanel disks={data.disk} dimmed={data.unreachable} />
+                <NetworkPanel net={data.net} series={data.netSeries} dimmed={data.unreachable} />
+              </Box>
+
+              <ChecksTable checks={data.checks} />
+            </>
+          ) : selected ? (
+            <NodeConfig
+              nodeName={selected}
+              isLocal={selectedNode?.local ?? false}
+              tab={tab}
+            />
+          ) : null}
         </Box>
       </Box>
     </Box>
