@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { Box, Drawer, Skeleton, Tab, Tabs, useMediaQuery } from '@mui/material'
+import { Box, Drawer, Skeleton, useMediaQuery } from '@mui/material'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { MetricPanel } from './components/MetricPanel'
@@ -8,13 +8,14 @@ import { DiskPanel } from './components/DiskPanel'
 import { NetworkPanel } from './components/NetworkPanel'
 import { ChecksTable } from './components/ChecksTable'
 import { NodeConfig, type ConfigTab } from './components/NodeConfig'
+import { SegmentedTabs, type TabItem } from './components/SegmentedTabs'
 import { useCluster } from './hooks/useCluster'
 import { useNodeData } from './hooks/useNodeData'
 import { colors, theme } from './theme'
 
 type NodeTab = 'dashboard' | ConfigTab
 
-const TABS: { value: NodeTab; label: string }[] = [
+const TABS: TabItem<NodeTab>[] = [
   { value: 'dashboard', label: 'Dashboard' },
   { value: 'checks', label: 'Checks' },
   { value: 'notifications', label: 'Notifications' },
@@ -97,19 +98,9 @@ export default function App({ username, onLogout }: AppProps) {
           onSettings={() => navigate('/settings')}
         />
 
-        <Box sx={{ px: { xs: 2, md: 4 }, borderBottom: `1px solid ${colors.border}` }}>
+        <Box sx={{ px: { xs: 2, md: 4 }, pt: 2.5, pb: 0.5 }}>
           <Box sx={{ maxWidth: 1280, mx: 'auto' }}>
-            <Tabs
-              value={tab}
-              onChange={(_, v: NodeTab) => setTab(v)}
-              variant="scrollable"
-              scrollButtons="auto"
-              sx={{ minHeight: 44, '& .MuiTab-root': { minHeight: 44, textTransform: 'none', fontSize: 14 } }}
-            >
-              {TABS.map((t) => (
-                <Tab key={t.value} value={t.value} label={t.label} />
-              ))}
-            </Tabs>
+            <SegmentedTabs items={TABS} value={tab} onChange={setTab} />
           </Box>
         </Box>
 
