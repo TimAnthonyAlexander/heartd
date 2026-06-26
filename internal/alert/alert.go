@@ -1,6 +1,6 @@
 // Package alert implements heartd's alerting subsystem: edge-triggered state
 // transition detection (the dedup "brain"), plus delivery over optional Email
-// (SMTP) and Webhook (HTTP POST JSON) channels.
+// (SMTP), Webhook (HTTP POST JSON), Slack, Discord, and Telegram channels.
 //
 // The central guarantee is deduplication: exactly ONE alert fires when a
 // problem begins and exactly ONE when it recovers. An ongoing failure never

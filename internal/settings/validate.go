@@ -134,6 +134,20 @@ func validateNotify(n Notify) error {
 	if n.Webhook.Enabled && n.Webhook.URL == "" {
 		return fmt.Errorf("webhook: url is required")
 	}
+	if n.Slack.Enabled && n.Slack.WebhookURL == "" {
+		return fmt.Errorf("slack: webhook url is required")
+	}
+	if n.Discord.Enabled && n.Discord.WebhookURL == "" {
+		return fmt.Errorf("discord: webhook url is required")
+	}
+	if n.Telegram.Enabled {
+		if n.Telegram.BotToken == "" {
+			return fmt.Errorf("telegram: bot token is required")
+		}
+		if n.Telegram.ChatID == "" {
+			return fmt.Errorf("telegram: chat id is required")
+		}
+	}
 	return nil
 }
 

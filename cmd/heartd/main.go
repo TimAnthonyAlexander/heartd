@@ -198,5 +198,17 @@ func notifiersFromSettings(n settings.Notify) []alert.Notifier {
 			SubjectPrefix: n.Email.SubjectPrefix,
 		}))
 	}
+	if n.Slack.Enabled && n.Slack.WebhookURL != "" {
+		out = append(out, alert.NewSlackNotifier(config.SlackNotify{WebhookURL: n.Slack.WebhookURL}))
+	}
+	if n.Discord.Enabled && n.Discord.WebhookURL != "" {
+		out = append(out, alert.NewDiscordNotifier(config.DiscordNotify{WebhookURL: n.Discord.WebhookURL}))
+	}
+	if n.Telegram.Enabled && n.Telegram.BotToken != "" && n.Telegram.ChatID != "" {
+		out = append(out, alert.NewTelegramNotifier(config.TelegramNotify{
+			BotToken: n.Telegram.BotToken,
+			ChatID:   n.Telegram.ChatID,
+		}))
+	}
 	return out
 }

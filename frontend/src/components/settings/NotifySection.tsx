@@ -1,6 +1,13 @@
 import { useState } from 'react'
 import { Box, Button, FormControlLabel, Stack, Switch, TextField, Typography } from '@mui/material'
-import type { EmailNotify, NotifySettings, WebhookNotify } from '../../api'
+import type {
+  DiscordNotify,
+  EmailNotify,
+  NotifySettings,
+  SlackNotify,
+  TelegramNotify,
+  WebhookNotify,
+} from '../../api'
 import { fetchNodes, testNotify, updateNotify } from '../../api'
 import { colors } from '../../theme'
 import { FeedbackText, SaveButton, Section, type Feedback } from './shared'
@@ -40,6 +47,9 @@ function fromEmailForm(f: EmailForm): EmailNotify {
 export function NotifySection({ nodeName, initial, onSaved }: Props) {
   const [webhook, setWebhook] = useState<WebhookNotify>(initial.webhook)
   const [email, setEmail] = useState<EmailForm>(toEmailForm(initial.email))
+  const [slack, setSlack] = useState<SlackNotify>(initial.slack)
+  const [discord, setDiscord] = useState<DiscordNotify>(initial.discord)
+  const [telegram, setTelegram] = useState<TelegramNotify>(initial.telegram)
   const [feedback, setFeedback] = useState<Feedback>('idle')
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<Record<string, string> | null>(null)
@@ -50,6 +60,13 @@ export function NotifySection({ nodeName, initial, onSaved }: Props) {
   const current = (): NotifySettings => ({
     webhook: { ...webhook, url: webhook.url.trim() },
     email: fromEmailForm(email),
+    slack: { ...slack, webhook_url: slack.webhook_url.trim() },
+    discord: { ...discord, webhook_url: discord.webhook_url.trim() },
+    telegram: {
+      ...telegram,
+      bot_token: telegram.bot_token.trim(),
+      chat_id: telegram.chat_id.trim(),
+    },
   })
 
   const setEmailField =
@@ -63,6 +80,9 @@ export function NotifySection({ nodeName, initial, onSaved }: Props) {
       const saved = await updateNotify(nodeName, current())
       setWebhook(saved.webhook)
       setEmail(toEmailForm(saved.email))
+      setSlack(saved.slack)
+      setDiscord(saved.discord)
+      setTelegram(saved.telegram)
       onSaved(saved)
       setFeedback('saved')
     } catch (err) {
@@ -84,7 +104,7 @@ export function NotifySection({ nodeName, initial, onSaved }: Props) {
     }
   }
 
-  // saveAll pushes the current notify config (webhook + email) to EVERY node —
+  // saveAll pushes the current notify config (all channels) to EVERY node —
   // the local node and each peer, via the same per-node endpoint that proxies to
   // peers. It reports per-node results since an unreachable/old peer can fail
   // while others succeed.
@@ -100,7 +120,7 @@ export function NotifySection({ nodeName, initial, onSaved }: Props) {
     if (nodes.length === 0) return
     if (
       !window.confirm(
-        `Apply these notification settings (webhook + email) to all ${nodes.length} node(s)? ` +
+        `Apply these notification settings to all ${nodes.length} node(s)? ` +
           `This overwrites each node's existing notification config.`,
       )
     )
@@ -250,6 +270,91 @@ export function NotifySection({ nodeName, initial, onSaved }: Props) {
           fullWidth
           placeholder="[heartd]"
         />
+      </Stack>
+
+      <Typography variant="overline" sx={{ color: colors.textFaint, display: 'block', mt: 3, mb: 1 }}>
+        Slack
+      </Typography>
+      <Stack spacing={2}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={slack.enabled}
+              onChange={(e) => setSlack((prev) => ({ ...prev, enabled: e.target.checked }))}
+            />
+          }
+          label="Enable Slack"
+        />
+        <TextField
+          label="Incoming webhook URL"
+          size="small"
+          value={slack.webhook_url}
+          onChange={(e) => setSlack((prev) => ({ ...prev, webhook_url: e.target.value }))}
+          disabled={!slack.enabled}
+          fullWidth
+          placeholder="https://hooks.slack.com/services/T000/B000/XXXX"
+        />
+      </Stack>
+
+      <Typography variant="overline" sx={{ color: colors.textFaint, display: 'block', mt: 3, mb: 1 }}>
+        Discord
+      </Typography>
+      <Stack spacing={2}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={discord.enabled}
+              onChange={(e) => setDiscord((prev) => ({ ...prev, enabled: e.target.checked }))}
+            />
+          }
+          label="Enable Discord"
+        />
+        <TextField
+          label="Webhook URL"
+          size="small"
+          value={discord.webhook_url}
+          onChange={(e) => setDiscord((prev) => ({ ...prev, webhook_url: e.target.value }))}
+          disabled={!discord.enabled}
+          fullWidth
+          placeholder="https://discord.com/api/webhooks/000/XXXX"
+        />
+      </Stack>
+
+      <Typography variant="overline" sx={{ color: colors.textFaint, display: 'block', mt: 3, mb: 1 }}>
+        Telegram
+      </Typography>
+      <Stack spacing={2}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={telegram.enabled}
+              onChange={(e) => setTelegram((prev) => ({ ...prev, enabled: e.target.checked }))}
+            />
+          }
+          label="Enable Telegram"
+        />
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
+          <TextField
+            label="Bot token"
+            type="password"
+            size="small"
+            value={telegram.bot_token}
+            onChange={(e) => setTelegram((prev) => ({ ...prev, bot_token: e.target.value }))}
+            disabled={!telegram.enabled}
+            autoComplete="new-password"
+            fullWidth
+            placeholder="123456:ABC-DEF..."
+          />
+          <TextField
+            label="Chat ID"
+            size="small"
+            value={telegram.chat_id}
+            onChange={(e) => setTelegram((prev) => ({ ...prev, chat_id: e.target.value }))}
+            disabled={!telegram.enabled}
+            fullWidth
+            placeholder="-1001234567890"
+          />
+        </Box>
       </Stack>
 
       {bulkResult && (

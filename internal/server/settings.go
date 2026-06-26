@@ -254,6 +254,20 @@ func (s *server) handleTestNotify(w http.ResponseWriter, r *http.Request) {
 		}).Send(ctx, test)
 		results["email"] = resultString(err)
 	}
+	if n.Slack.Enabled && n.Slack.WebhookURL != "" {
+		err := alert.NewSlackNotifier(config.SlackNotify{WebhookURL: n.Slack.WebhookURL}).Send(ctx, test)
+		results["slack"] = resultString(err)
+	}
+	if n.Discord.Enabled && n.Discord.WebhookURL != "" {
+		err := alert.NewDiscordNotifier(config.DiscordNotify{WebhookURL: n.Discord.WebhookURL}).Send(ctx, test)
+		results["discord"] = resultString(err)
+	}
+	if n.Telegram.Enabled && n.Telegram.BotToken != "" && n.Telegram.ChatID != "" {
+		err := alert.NewTelegramNotifier(config.TelegramNotify{
+			BotToken: n.Telegram.BotToken, ChatID: n.Telegram.ChatID,
+		}).Send(ctx, test)
+		results["telegram"] = resultString(err)
+	}
 	if len(results) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no channel enabled to test"})
 		return

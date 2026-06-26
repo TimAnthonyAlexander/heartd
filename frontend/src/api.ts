@@ -392,9 +392,28 @@ export interface WebhookNotify {
   url: string
 }
 
+export interface SlackNotify {
+  enabled: boolean
+  webhook_url: string
+}
+
+export interface DiscordNotify {
+  enabled: boolean
+  webhook_url: string
+}
+
+export interface TelegramNotify {
+  enabled: boolean
+  bot_token: string
+  chat_id: string
+}
+
 export interface NotifySettings {
   email: EmailNotify
   webhook: WebhookNotify
+  slack: SlackNotify
+  discord: DiscordNotify
+  telegram: TelegramNotify
 }
 
 export interface CheckConfig {

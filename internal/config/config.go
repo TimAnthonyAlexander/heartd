@@ -145,8 +145,11 @@ type Thresholds struct {
 
 // Notify holds optional alert notification channels.
 type Notify struct {
-	Email   *EmailNotify   `yaml:"email"`
-	Webhook *WebhookNotify `yaml:"webhook"`
+	Email    *EmailNotify    `yaml:"email"`
+	Webhook  *WebhookNotify  `yaml:"webhook"`
+	Slack    *SlackNotify    `yaml:"slack"`
+	Discord  *DiscordNotify  `yaml:"discord"`
+	Telegram *TelegramNotify `yaml:"telegram"`
 }
 
 // EmailNotify configures SMTP email alerts.
@@ -163,6 +166,22 @@ type EmailNotify struct {
 // WebhookNotify configures a webhook alert target.
 type WebhookNotify struct {
 	URL string `yaml:"url"`
+}
+
+// SlackNotify configures a Slack incoming-webhook alert target.
+type SlackNotify struct {
+	WebhookURL string `yaml:"webhook_url"`
+}
+
+// DiscordNotify configures a Discord webhook alert target.
+type DiscordNotify struct {
+	WebhookURL string `yaml:"webhook_url"`
+}
+
+// TelegramNotify configures a Telegram bot alert target.
+type TelegramNotify struct {
+	BotToken string `yaml:"bot_token"`
+	ChatID   string `yaml:"chat_id"`
 }
 
 // Valid check types.

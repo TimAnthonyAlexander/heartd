@@ -53,10 +53,33 @@ type WebhookNotify struct {
 	URL     string `json:"url"`
 }
 
+// SlackNotify configures a Slack incoming-webhook alert target.
+type SlackNotify struct {
+	Enabled    bool   `json:"enabled"`
+	WebhookURL string `json:"webhook_url"`
+}
+
+// DiscordNotify configures a Discord webhook alert target.
+type DiscordNotify struct {
+	Enabled    bool   `json:"enabled"`
+	WebhookURL string `json:"webhook_url"`
+}
+
+// TelegramNotify configures a Telegram bot alert target. BotToken is a secret and
+// is handled exactly like the SMTP password (persisted and echoed back as-is).
+type TelegramNotify struct {
+	Enabled  bool   `json:"enabled"`
+	BotToken string `json:"bot_token"`
+	ChatID   string `json:"chat_id"`
+}
+
 // Notify holds the notification channel settings.
 type Notify struct {
-	Email   EmailNotify   `json:"email"`
-	Webhook WebhookNotify `json:"webhook"`
+	Email    EmailNotify    `json:"email"`
+	Webhook  WebhookNotify  `json:"webhook"`
+	Slack    SlackNotify    `json:"slack"`
+	Discord  DiscordNotify  `json:"discord"`
+	Telegram TelegramNotify `json:"telegram"`
 }
 
 // Check is a configurable service check.
@@ -166,6 +189,19 @@ func (s *Service) seed(cfg config.Config) error {
 	}
 	if cfg.Notify.Webhook != nil {
 		n.Webhook = WebhookNotify{Enabled: true, URL: cfg.Notify.Webhook.URL}
+	}
+	if cfg.Notify.Slack != nil {
+		n.Slack = SlackNotify{Enabled: true, WebhookURL: cfg.Notify.Slack.WebhookURL}
+	}
+	if cfg.Notify.Discord != nil {
+		n.Discord = DiscordNotify{Enabled: true, WebhookURL: cfg.Notify.Discord.WebhookURL}
+	}
+	if cfg.Notify.Telegram != nil {
+		n.Telegram = TelegramNotify{
+			Enabled:  true,
+			BotToken: cfg.Notify.Telegram.BotToken,
+			ChatID:   cfg.Notify.Telegram.ChatID,
+		}
 	}
 	if err := s.writeJSON(keyNotify, n); err != nil {
 		return err
