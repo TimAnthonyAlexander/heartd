@@ -8,8 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/timanthonyalexander/heartd/internal/alert"
@@ -726,6 +729,13 @@ func (s *server) validSecret(presented string) bool {
 }
 
 // handlePeerAnnounce records a peer that announced itself to this node.
+//
+// Announces auto-create nodes (so a genuinely new peer shows up without manual
+// entry), but a node announces under its OWN config name + advertise_url — which
+// may differ from how you added it here. To avoid duplicates, a NEW name is only
+// created when no node already lives at the same address: e.g. a laptop whose
+// config name is "web-01" advertising http://localhost:9300 must not spawn a
+// "web-01" twin when you already added that exact address as "macbook".
 func (s *server) handlePeerAnnounce(w http.ResponseWriter, r *http.Request) {
 	var req cluster.AnnounceRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
@@ -736,12 +746,76 @@ func (s *server) handlePeerAnnounce(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and url are required"})
 		return
 	}
+
+	// Refresh a peer we already track by this name; otherwise it's a candidate
+	// new node — and we only create it if its address isn't already represented.
+	if _, known, err := s.cfg.DB.GetPeer(req.Name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	} else if !known {
+		dup, err := s.peerAtSameAddr(req.URL)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if dup != "" {
+			// Already tracked under another name — ignore, don't create a twin.
+			log.Printf("server: ignoring announce of %q at %s — already tracked as %q", req.Name, req.URL, dup)
+			writeJSON(w, http.StatusOK, map[string]string{"name": s.cfg.NodeName})
+			return
+		}
+	}
+
 	// Don't grant a secret from an announce; preserve any existing one.
 	if err := s.cfg.DB.UpsertPeer(storage.Peer{Name: req.Name, URL: req.URL}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"name": s.cfg.NodeName})
+}
+
+// peerAtSameAddr returns the name of an existing peer whose URL points at the
+// same host:port as rawURL, or "" if none. Used to suppress duplicate announces
+// from a node that advertises under a different name than the one you gave it.
+// An unparseable rawURL returns "" (no match) so the caller proceeds normally.
+func (s *server) peerAtSameAddr(rawURL string) (string, error) {
+	want, ok := normalizeAddr(rawURL)
+	if !ok {
+		return "", nil
+	}
+	peers, err := s.cfg.DB.ListPeers()
+	if err != nil {
+		return "", err
+	}
+	for _, p := range peers {
+		if got, ok := normalizeAddr(p.URL); ok && got == want {
+			return p.Name, nil
+		}
+	}
+	return "", nil
+}
+
+// normalizeAddr reduces a URL to a lowercase "host:port", filling in the default
+// port for the scheme, so two URLs that differ only cosmetically (case, implicit
+// port) compare equal. Returns ok=false when the URL has no usable host.
+func normalizeAddr(rawURL string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return "", false
+	}
+	port := u.Port()
+	if port == "" {
+		if u.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	return host + ":" + port, true
 }
 
 // handlePeerMetrics returns this node's own current metrics to a peer.
