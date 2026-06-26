@@ -150,6 +150,19 @@ CREATE TABLE IF NOT EXISTS alert_rule (
     severity              TEXT NOT NULL DEFAULT 'warning',
     created_at            INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS alert_event (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    node        TEXT NOT NULL,
+    rule_id     TEXT NOT NULL DEFAULT '',
+    rule_source TEXT NOT NULL DEFAULT '',
+    entity      TEXT NOT NULL DEFAULT '',
+    severity    TEXT NOT NULL DEFAULT '',
+    state       TEXT NOT NULL,
+    subject     TEXT NOT NULL DEFAULT '',
+    detail      TEXT NOT NULL DEFAULT '',
+    at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_alert_event_node_at ON alert_event(node, at);
 `
 
 // Open opens (creating if needed) the SQLite database at path and ensures the

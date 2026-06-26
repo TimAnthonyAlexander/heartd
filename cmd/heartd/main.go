@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -65,6 +66,26 @@ func run(configPath, addrOverride string, headlessFlag bool) error {
 	// node setups have no peers, so this is a no-op there.
 	coordinator := alert.NewCoordinator(cfg.Server.Name, db)
 	engine.SetCoordinator(coordinator)
+
+	// Persist every confirmed transition to the incident history. The engine
+	// invokes this only on real edges (never during its restart-safety seed pass),
+	// off its lock, so a slow write can't stall the state machine.
+	engine.SetRecorder(func(a alert.Alert) {
+		ev := storage.AlertEvent{
+			Node:       a.Node,
+			RuleID:     strconv.FormatInt(a.RuleID, 10),
+			RuleSource: a.Source,
+			Entity:     a.Entity,
+			Severity:   a.Severity,
+			State:      a.Status(),
+			Subject:    a.Subject,
+			Detail:     a.Detail,
+			At:         a.Time,
+		}
+		if err := db.InsertAlertEvent(ev); err != nil {
+			log.Printf("alert: record event failed: %v", err)
+		}
+	})
 
 	// Start the metrics collection loop.
 	coll := collector.New(db, cfg.Server.Name, set)

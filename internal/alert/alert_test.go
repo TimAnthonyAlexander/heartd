@@ -347,3 +347,104 @@ func TestConcurrentObserveNoDeadlock(t *testing.T) {
 	}
 	t.Fatalf("final transition did not dispatch (count stuck at %d)", f.count())
 }
+
+// recordingSink captures every Alert handed to the engine's recorder. Safe for
+// concurrent use (the engine records off its lock).
+type recordingSink struct {
+	mu      sync.Mutex
+	records []Alert
+}
+
+func (s *recordingSink) record(a Alert) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records = append(s.records, a)
+}
+
+func (s *recordingSink) snapshot() []Alert {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Alert, len(s.records))
+	copy(out, s.records)
+	return out
+}
+
+func waitForSink(t *testing.T, s *recordingSink, n int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(s.snapshot()) == n {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d records, got %d", n, len(s.snapshot()))
+}
+
+// TestRecorderSeedEmitsNoEvents is the core safety guarantee: the restart-safety
+// seed pass primes baseline state without recording any history. Only real edges
+// (firing, then recovered) produce records.
+func TestRecorderSeedEmitsNoEvents(t *testing.T) {
+	e, _ := newTestEngine()
+	sink := &recordingSink{}
+	e.SetRecorder(sink.record)
+	r := RuleView{ID: 1, Name: "CPU high", Severity: "critical", Source: "cpu"}
+
+	// Seed as already-breaching, then keep observing it as breaching: a seeded
+	// firing baseline must NOT record a firing event.
+	e.Observe(r, "web-01", "", "d", true, true, t0)
+	e.Observe(r, "web-01", "", "d", true, false, t0.Add(time.Second))
+	if got := sink.snapshot(); len(got) != 0 {
+		t.Fatalf("seed/steady-state recorded %d events, want 0: %+v", len(got), got)
+	}
+
+	// A real recovery edge records exactly one recovered event.
+	e.Observe(r, "web-01", "", "CPU 40%", false, false, t0.Add(2*time.Second))
+	waitForSink(t, sink, 1)
+	rec := sink.snapshot()[0]
+	if rec.Firing || rec.Status() != "recovered" || rec.Node != "web-01" || rec.Source != "cpu" {
+		t.Fatalf("unexpected recovered record: %+v", rec)
+	}
+
+	// A fresh firing edge records exactly one firing event.
+	e.Observe(r, "web-01", "", "CPU 95%", true, false, t0.Add(3*time.Second))
+	waitForSink(t, sink, 2)
+	if rec := sink.snapshot()[1]; !rec.Firing || rec.Severity != "critical" {
+		t.Fatalf("unexpected firing record: %+v", rec)
+	}
+}
+
+// TestActiveAlertsSnapshot verifies the live firing-state view: only breached
+// entities appear, with their context, and a recovery clears them.
+func TestActiveAlertsSnapshot(t *testing.T) {
+	e, _ := newTestEngine()
+	r := RuleView{ID: 7, Name: "Disk full", Severity: "warning", Source: "disk"}
+
+	// Nothing firing yet.
+	if got := e.ActiveAlerts(); len(got) != 0 {
+		t.Fatalf("expected no active alerts, got %d", len(got))
+	}
+
+	// Firing on web-01 [/data]; a peer db-02 stays clear.
+	e.Observe(r, "web-01", "/data", "Disk 95% >= 90%", true, false, t0)
+	e.Observe(r, "db-02", "/", "Disk 10% >= 90%", false, false, t0)
+
+	active := e.ActiveAlertsForNode("web-01")
+	if len(active) != 1 {
+		t.Fatalf("expected 1 active alert for web-01, got %d", len(active))
+	}
+	a := active[0]
+	if a.Entity != "/data" || a.Severity != "warning" || a.Source != "disk" ||
+		a.Subject != "Disk full" || a.Detail != "Disk 95% >= 90%" || a.BreachSince.IsZero() {
+		t.Fatalf("unexpected active alert: %+v", a)
+	}
+	if got := e.ActiveAlertsForNode("db-02"); len(got) != 0 {
+		t.Fatalf("expected db-02 clear, got %d active", len(got))
+	}
+
+	// Recovery clears it from the live view.
+	e.Observe(r, "web-01", "/data", "Disk 40% >= 90%", false, false, t0.Add(time.Second))
+	if got := e.ActiveAlertsForNode("web-01"); len(got) != 0 {
+		t.Fatalf("expected web-01 clear after recovery, got %d active", len(got))
+	}
+}

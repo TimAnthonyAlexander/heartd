@@ -334,6 +334,48 @@ export interface AlertRule {
   severity: 'warning' | 'critical'
 }
 
+// ----- Alert activity (live firing state + incident history) -----
+
+// ActiveAlert is one rule currently firing for a node, from the engine's live
+// in-memory state.
+export interface ActiveAlert {
+  entity: string
+  source: string
+  subject: string
+  severity: 'warning' | 'critical'
+  detail: string
+  since: string // RFC3339, when it started firing ("" if unknown)
+}
+
+// AlertEvent is one past firing/recovered transition recorded for a node.
+export interface AlertEvent {
+  node: string
+  rule_id: string
+  rule_source: string
+  entity: string
+  severity: string
+  state: 'firing' | 'recovered'
+  subject: string
+  detail: string
+  at: string // RFC3339
+}
+
+export function fetchActiveAlerts(nodeName: string, signal?: AbortSignal): Promise<ActiveAlert[]> {
+  return getJSON<ActiveAlert[]>(`/api/nodes/${encodeURIComponent(nodeName)}/alerts/active`, signal)
+}
+
+export function fetchAlertHistory(
+  nodeName: string,
+  minutes = 1440,
+  limit = 100,
+  signal?: AbortSignal,
+): Promise<AlertEvent[]> {
+  return getJSON<AlertEvent[]>(
+    `/api/nodes/${encodeURIComponent(nodeName)}/alerts/history?minutes=${minutes}&limit=${limit}`,
+    signal,
+  )
+}
+
 export interface EmailNotify {
   enabled: boolean
   smtp_host: string

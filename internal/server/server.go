@@ -151,6 +151,11 @@ func (s *server) registerDashboardRoutes(mux *http.ServeMux) {
 	protect("GET /api/nodes/{name}/diskio", s.handleDiskIO)
 	protect("GET /api/nodes/{name}/diskio/history", s.handleDiskIOHistory)
 
+	// Alert activity for a node: what is firing right now (from the engine's live
+	// in-memory state) and the recent firing/recovered history (from storage).
+	protect("GET /api/nodes/{name}/alerts/active", s.handleAlertsActive)
+	protect("GET /api/nodes/{name}/alerts/history", s.handleAlertsHistory)
+
 	// Runtime configuration, addressed per node. For the local node these operate
 	// on its own settings service; for a peer they proxy the same request to that
 	// peer's /api/peer/settings/* over the shared-secret link.
@@ -655,6 +660,86 @@ func (s *server) handlePeerDiskIO(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// --- Alert activity ---
+
+// activeAlertDTO is the dashboard's view of one alert that is firing right now.
+type activeAlertDTO struct {
+	Entity   string `json:"entity"`
+	Source   string `json:"source"`
+	Subject  string `json:"subject"`
+	Severity string `json:"severity"` // warning | critical
+	Detail   string `json:"detail"`
+	Since    string `json:"since"` // RFC3339, when it started firing ("" if unknown)
+}
+
+// alertEventDTO is the dashboard's view of one past firing/recovered transition.
+type alertEventDTO struct {
+	Node       string `json:"node"`
+	RuleID     string `json:"rule_id"`
+	RuleSource string `json:"rule_source"`
+	Entity     string `json:"entity"`
+	Severity   string `json:"severity"`
+	State      string `json:"state"` // firing | recovered
+	Subject    string `json:"subject"`
+	Detail     string `json:"detail"`
+	At         string `json:"at"` // RFC3339
+}
+
+// handleAlertsActive returns the alerts currently firing for a node, as tracked
+// live in the engine's in-memory state. An empty list (or absent engine) yields
+// an empty array, not an error — "nothing firing" is the steady state.
+func (s *server) handleAlertsActive(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	out := make([]activeAlertDTO, 0)
+	if s.cfg.Engine != nil {
+		for _, a := range s.cfg.Engine.ActiveAlertsForNode(name) {
+			since := ""
+			if !a.BreachSince.IsZero() {
+				since = a.BreachSince.UTC().Format(time.RFC3339)
+			}
+			out = append(out, activeAlertDTO{
+				Entity:   a.Entity,
+				Source:   a.Source,
+				Subject:  a.Subject,
+				Severity: a.Severity,
+				Detail:   a.Detail,
+				Since:    since,
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleAlertsHistory returns past firing/recovered events for a node, most
+// recent first. Query params: minutes (default 1440 = 24h), limit (default 100).
+func (s *server) handleAlertsHistory(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	minutes := queryInt(r, "minutes", 1440)
+	limit := queryInt(r, "limit", 100)
+
+	since := time.Now().UTC().Add(-time.Duration(minutes) * time.Minute)
+	events, err := s.cfg.DB.AlertEventHistory(name, since, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	out := make([]alertEventDTO, 0, len(events))
+	for _, e := range events {
+		out = append(out, alertEventDTO{
+			Node:       e.Node,
+			RuleID:     e.RuleID,
+			RuleSource: e.RuleSource,
+			Entity:     e.Entity,
+			Severity:   e.Severity,
+			State:      e.State,
+			Subject:    e.Subject,
+			Detail:     e.Detail,
+			At:         e.At.UTC().Format(time.RFC3339),
+		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

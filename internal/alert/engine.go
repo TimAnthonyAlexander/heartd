@@ -30,6 +30,27 @@ type ruleState struct {
 	level       string    // "ok" | severity
 	breachSince time.Time // when the condition first became true; zero if not breaching
 	recoveredAt time.Time // when it first cleared while firing; drives RecoverGrace
+	firingSince time.Time // when this entity started firing; zero when ok (survives recovery grace)
+
+	// Context captured on the last observation, so ActiveAlerts can describe a
+	// currently-firing entity without re-deriving it from the key.
+	node    string
+	entity  string
+	source  string
+	subject string
+	detail  string
+}
+
+// ActiveAlert is a snapshot of one entity the Engine currently considers firing.
+// It is a value copy; the Engine never hands out pointers to its internal state.
+type ActiveAlert struct {
+	Node        string
+	Entity      string
+	Source      string
+	Subject     string
+	Severity    string
+	Detail      string
+	BreachSince time.Time
 }
 
 // Engine is the deduplication brain. It records the last known state of every
@@ -39,6 +60,7 @@ type ruleState struct {
 type Engine struct {
 	dispatcher dispatcher
 	coord      *Coordinator // optional cross-node dedup; nil = send everything locally
+	recorder   func(Alert)  // optional incident-history sink; nil = record nothing
 
 	mu    sync.Mutex
 	state map[string]ruleState
@@ -52,6 +74,12 @@ func NewEngine(d *Dispatcher) *Engine {
 // SetCoordinator enables cross-node alert deduplication. When set, alerts about
 // a peer are gated through the Coordinator so only one node delivers them.
 func (e *Engine) SetCoordinator(c *Coordinator) { e.coord = c }
+
+// SetRecorder installs a sink that persists every confirmed transition (one
+// firing, one recovered) to the incident history. The recorder is invoked OFF
+// the Engine's lock and only for real edges — never during a Seed pass — so the
+// restart-safety priming records no synthetic history.
+func (e *Engine) SetRecorder(r func(Alert)) { e.recorder = r }
 
 // gatedDispatch sends a through the coordinator (off the caller's goroutine, so
 // the runner loop never blocks on peer queries) when one is configured; without
@@ -99,14 +127,16 @@ func (e *Engine) Observe(rule RuleView, node, entity, detail string, conditionMe
 	var toFire *Alert
 
 	if seed {
-		// Prime steady-state without dispatching.
+		// Prime steady-state without dispatching (and without recording history).
 		if conditionMet {
 			st.level = severity
 			st.breachSince = now.Add(-forDur)
+			st.firingSince = st.breachSince
 			st.recoveredAt = time.Time{}
 		} else {
 			st = ruleState{level: levelOK}
 		}
+		st.node, st.entity, st.source, st.subject, st.detail = node, entity, rule.Source, rule.Name, detail
 		e.state[key] = st
 		e.mu.Unlock()
 		return
@@ -119,6 +149,7 @@ func (e *Engine) Observe(rule RuleView, node, entity, detail string, conditionMe
 		}
 		if st.level == levelOK && now.Sub(st.breachSince) >= forDur {
 			st.level = severity
+			st.firingSince = st.breachSince
 			toFire = &Alert{
 				Firing: true,
 				Title:  fmt.Sprintf("%s — %s", rule.Name, scope(node, entity)),
@@ -134,6 +165,7 @@ func (e *Engine) Observe(rule RuleView, node, entity, detail string, conditionMe
 			if now.Sub(st.recoveredAt) >= graceDur {
 				st.level = levelOK
 				st.recoveredAt = time.Time{}
+				st.firingSince = time.Time{}
 				toFire = &Alert{
 					Firing: false,
 					Title:  fmt.Sprintf("%s recovered — %s", rule.Name, scope(node, entity)),
@@ -143,6 +175,7 @@ func (e *Engine) Observe(rule RuleView, node, entity, detail string, conditionMe
 		}
 	}
 
+	st.node, st.entity, st.source, st.subject, st.detail = node, entity, rule.Source, rule.Name, detail
 	e.state[key] = st
 	e.mu.Unlock()
 
@@ -157,7 +190,51 @@ func (e *Engine) Observe(rule RuleView, node, entity, detail string, conditionMe
 	toFire.Subject = rule.Name
 	toFire.Severity = severity
 	toFire.Time = now.UTC()
+	// Persist the transition (firing or recovered) to the incident history before
+	// dispatch. Done outside the lock so the recorder can't deadlock the Engine,
+	// and unconditionally — history is per-node-local and not subject to the
+	// cross-node send election that gatedDispatch applies.
+	if e.recorder != nil {
+		e.recorder(*toFire)
+	}
 	e.gatedDispatch(*toFire)
+}
+
+// ActiveAlerts returns a snapshot of every entity the Engine currently considers
+// firing (a breached rule that has not yet recovered, including those still
+// within their recovery grace). The result is a copy; no internal state is
+// shared with the caller.
+func (e *Engine) ActiveAlerts() []ActiveAlert {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]ActiveAlert, 0)
+	for _, st := range e.state {
+		if st.level == "" || st.level == levelOK {
+			continue
+		}
+		out = append(out, ActiveAlert{
+			Node:        st.node,
+			Entity:      st.entity,
+			Source:      st.source,
+			Subject:     st.subject,
+			Severity:    st.level,
+			Detail:      st.detail,
+			BreachSince: st.firingSince,
+		})
+	}
+	return out
+}
+
+// ActiveAlertsForNode is ActiveAlerts filtered to a single node.
+func (e *Engine) ActiveAlertsForNode(node string) []ActiveAlert {
+	all := e.ActiveAlerts()
+	out := make([]ActiveAlert, 0, len(all))
+	for _, a := range all {
+		if a.Node == node {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // Forget drops all remembered state for a rule (e.g. when it is deleted), so a

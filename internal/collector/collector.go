@@ -233,4 +233,7 @@ func (c *Collector) prune() {
 	if _, err := c.db.PruneDiskIO(before); err != nil {
 		log.Printf("collector: prune disk io failed: %v", err)
 	}
+	if _, err := c.db.PruneAlertEvents(before); err != nil {
+		log.Printf("collector: prune alert events failed: %v", err)
+	}
 }

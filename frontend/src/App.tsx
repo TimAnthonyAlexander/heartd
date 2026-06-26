@@ -18,6 +18,7 @@ import { nodeLabel } from './api'
 import { useCluster } from './hooks/useCluster'
 import { useNodeData } from './hooks/useNodeData'
 import { useNodeAlerts } from './hooks/useNodeAlerts'
+import { useNodeAlertActivity } from './hooks/useNodeAlertActivity'
 import { colors, theme } from './theme'
 
 type NodeTab = 'dashboard' | ConfigTab
@@ -77,6 +78,7 @@ export default function App({ username, onLogout }: AppProps) {
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
   const data = useNodeData(selected, rangeMinutes, paused)
   const alerts = useNodeAlerts(selected, tab === 'dashboard')
+  const alertActivity = useNodeAlertActivity(selected, tab === 'dashboard')
 
   // Default to the local node, or fall back if the URL names an unknown node.
   useEffect(() => {
@@ -215,7 +217,12 @@ export default function App({ username, onLogout }: AppProps) {
                   checks={data.checks}
                   onEdit={(name) => requestEdit({ kind: 'check', name })}
                 />
-                <AlertsPanel alerts={alerts} onEdit={(id) => requestEdit({ kind: 'alert', id })} />
+                <AlertsPanel
+                  alerts={alerts}
+                  active={alertActivity.active}
+                  history={alertActivity.history}
+                  onEdit={(id) => requestEdit({ kind: 'alert', id })}
+                />
               </Box>
             </>
           ) : selected ? (
