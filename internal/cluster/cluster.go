@@ -30,11 +30,11 @@ type AnnounceRequest struct {
 
 // peerMetrics mirrors the JSON returned by /api/peer/metrics.
 type peerMetrics struct {
-	CPUPercent float64 `json:"cpu_percent"`
-	MemUsed    uint64  `json:"mem_used"`
-	MemTotal   uint64  `json:"mem_total"`
-	MemPercent float64 `json:"mem_percent"`
-	CollectedAt string `json:"collected_at"`
+	CPUPercent  float64 `json:"cpu_percent"`
+	MemUsed     uint64  `json:"mem_used"`
+	MemTotal    uint64  `json:"mem_total"`
+	MemPercent  float64 `json:"mem_percent"`
+	CollectedAt string  `json:"collected_at"`
 }
 
 // peerCheck mirrors one element of the JSON returned by /api/peer/checks.
@@ -63,6 +63,16 @@ type peerNet struct {
 	RecvRate  float64 `json:"recv_rate"`
 	SentRate  float64 `json:"sent_rate"`
 	At        string  `json:"at"`
+}
+
+// peerDiskIO mirrors one element of /api/peer/diskio.
+type peerDiskIO struct {
+	Device         string `json:"device"`
+	ReadBytesRate  uint64 `json:"read_bytes_rate"`
+	WriteBytesRate uint64 `json:"write_bytes_rate"`
+	ReadOpsRate    uint64 `json:"read_ops_rate"`
+	WriteOpsRate   uint64 `json:"write_ops_rate"`
+	At             string `json:"at"`
 }
 
 // Poller announces this node to peers and polls them on an interval. The peer
@@ -212,6 +222,7 @@ func (p *Poller) pollPeer(ctx context.Context, peer storage.Peer) {
 
 	p.storePeerDisk(ctx, peer)
 	p.storePeerNet(ctx, peer)
+	p.storePeerDiskIO(ctx, peer)
 
 	_ = p.db.SetPeerStatus(peer.Name, "ok", time.Now().UTC(), "")
 }
@@ -255,6 +266,30 @@ func (p *Poller) storePeerNet(ctx context.Context, peer storage.Peer) {
 		Node: peer.Name, RecvBytes: n.RecvBytes, SentBytes: n.SentBytes,
 		RecvRate: n.RecvRate, SentRate: n.SentRate, At: at,
 	})
+}
+
+// storePeerDiskIO fetches a peer's latest per-device disk I/O snapshot and
+// records each device under the peer's name.
+func (p *Poller) storePeerDiskIO(ctx context.Context, peer storage.Peer) {
+	var ios []peerDiskIO
+	if err := p.getJSON(ctx, peer, "/api/peer/diskio", &ios); err != nil {
+		return
+	}
+	for _, io := range ios {
+		at, perr := time.Parse(time.RFC3339, io.At)
+		if perr != nil {
+			at = time.Now().UTC()
+		}
+		_ = p.db.InsertDiskIOSample(storage.DiskIOSample{
+			Node:           peer.Name,
+			Device:         io.Device,
+			ReadBytesRate:  io.ReadBytesRate,
+			WriteBytesRate: io.WriteBytesRate,
+			ReadOpsRate:    io.ReadOpsRate,
+			WriteOpsRate:   io.WriteOpsRate,
+			At:             at,
+		})
+	}
 }
 
 func (p *Poller) fetchMetrics(ctx context.Context, peer storage.Peer) (peerMetrics, error) {

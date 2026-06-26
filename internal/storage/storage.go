@@ -76,6 +76,18 @@ CREATE TABLE IF NOT EXISTS net_sample (
     at         INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_net_sample_node_at ON net_sample(node, at);
+CREATE TABLE IF NOT EXISTS disk_io_sample (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    node             TEXT NOT NULL,
+    device           TEXT NOT NULL,
+    read_bytes_rate  INTEGER NOT NULL,
+    write_bytes_rate INTEGER NOT NULL,
+    read_ops_rate    INTEGER NOT NULL,
+    write_ops_rate   INTEGER NOT NULL,
+    at               INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_disk_io_sample_node_at ON disk_io_sample(node, at);
+CREATE INDEX IF NOT EXISTS idx_disk_io_sample_node_device_at ON disk_io_sample(node, device, at);
 CREATE TABLE IF NOT EXISTS node_alias (
     node  TEXT PRIMARY KEY,
     alias TEXT NOT NULL

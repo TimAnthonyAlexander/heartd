@@ -256,6 +256,40 @@ export function fetchNetworkHistory(
   )
 }
 
+// One physical device's latest disk throughput / IOPS (rates are per second).
+export interface DiskIODevice {
+  device: string
+  read_bytes_rate: number
+  write_bytes_rate: number
+  read_ops_rate: number
+  write_ops_rate: number
+  at: string
+}
+
+// Disk throughput / IOPS aggregated across all devices at one instant.
+export interface DiskIOHistoryPoint {
+  read_bytes_rate: number
+  write_bytes_rate: number
+  read_ops_rate: number
+  write_ops_rate: number
+  at: string
+}
+
+export function fetchDiskIO(nodeName: string, signal?: AbortSignal): Promise<DiskIODevice[]> {
+  return getJSON<DiskIODevice[]>(`/api/nodes/${encodeURIComponent(nodeName)}/diskio`, signal)
+}
+
+export function fetchDiskIOHistory(
+  nodeName: string,
+  minutes = 60,
+  signal?: AbortSignal,
+): Promise<DiskIOHistoryPoint[]> {
+  return getJSON<DiskIOHistoryPoint[]>(
+    `/api/nodes/${encodeURIComponent(nodeName)}/diskio/history?minutes=${minutes}`,
+    signal,
+  )
+}
+
 // ----- Settings -----
 
 export interface GeneralSettings {

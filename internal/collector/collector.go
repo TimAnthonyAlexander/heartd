@@ -29,6 +29,10 @@ type Collector struct {
 	// Previous network counters, for deriving throughput rates between samples.
 	prevNet   metrics.NetCounters
 	prevNetAt time.Time
+
+	// Previous per-device disk I/O counters, for deriving throughput/IOPS rates.
+	prevDiskIO   map[string]metrics.DiskIOCounters
+	prevDiskIOAt time.Time
 }
 
 // New builds a Collector for the local node.
@@ -83,6 +87,7 @@ func (c *Collector) sampleOnce(ctx context.Context) {
 
 	c.sampleDisks(ctx, at)
 	c.sampleNet(ctx, at)
+	c.sampleDiskIO(ctx, at)
 }
 
 // sampleDisks records current usage per mount and returns the highest usage
@@ -155,6 +160,57 @@ func (c *Collector) sampleNet(ctx context.Context, at time.Time) {
 	}
 }
 
+// sampleDiskIO reads cumulative per-device disk counters and stores one sample
+// per physical device, with throughput/IOPS rates derived from the previous
+// reading. Counter resets (reboots/wraps) yield a zero rate rather than a
+// negative spike, mirroring sampleNet.
+func (c *Collector) sampleDiskIO(ctx context.Context, at time.Time) {
+	counters, err := metrics.ReadDiskIOCounters(ctx)
+	if err != nil {
+		log.Printf("collector: disk io sample failed: %v", err)
+		return
+	}
+
+	var secs float64
+	if !c.prevDiskIOAt.IsZero() {
+		secs = at.Sub(c.prevDiskIOAt).Seconds()
+	}
+
+	for device, cur := range counters {
+		prev, hadPrev := c.prevDiskIO[device]
+		var readBytes, writeBytes, readOps, writeOps uint64
+		if hadPrev && secs > 0 {
+			readBytes = perSecond(cur.ReadBytes, prev.ReadBytes, secs)
+			writeBytes = perSecond(cur.WriteBytes, prev.WriteBytes, secs)
+			readOps = perSecond(cur.ReadOps, prev.ReadOps, secs)
+			writeOps = perSecond(cur.WriteOps, prev.WriteOps, secs)
+		}
+		if err := c.db.InsertDiskIOSample(storage.DiskIOSample{
+			Node:           c.node,
+			Device:         device,
+			ReadBytesRate:  readBytes,
+			WriteBytesRate: writeBytes,
+			ReadOpsRate:    readOps,
+			WriteOpsRate:   writeOps,
+			At:             at,
+		}); err != nil {
+			log.Printf("collector: disk io persist failed: %v", err)
+		}
+	}
+	c.prevDiskIO = counters
+	c.prevDiskIOAt = at
+}
+
+// perSecond returns the per-second rate between two cumulative counter values.
+// A current value below the previous one indicates a counter reset (reboot or
+// wrap) and yields 0 rather than a spurious spike.
+func perSecond(cur, prev uint64, secs float64) uint64 {
+	if cur < prev || secs <= 0 {
+		return 0
+	}
+	return uint64(float64(cur-prev)/secs + 0.5)
+}
+
 // prune removes samples older than the current retention window.
 func (c *Collector) prune() {
 	retention := c.settings.General().Retention
@@ -167,5 +223,8 @@ func (c *Collector) prune() {
 	}
 	if _, err := c.db.PruneNet(before); err != nil {
 		log.Printf("collector: prune net failed: %v", err)
+	}
+	if _, err := c.db.PruneDiskIO(before); err != nil {
+		log.Printf("collector: prune disk io failed: %v", err)
 	}
 }

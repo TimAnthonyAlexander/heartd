@@ -73,6 +73,7 @@ func New(cfg Config) http.Handler {
 	mux.Handle("GET /api/peer/checks", s.requireSecret(http.HandlerFunc(s.handlePeerChecks)))
 	mux.Handle("GET /api/peer/disk", s.requireSecret(http.HandlerFunc(s.handlePeerDisk)))
 	mux.Handle("GET /api/peer/network", s.requireSecret(http.HandlerFunc(s.handlePeerNetwork)))
+	mux.Handle("GET /api/peer/diskio", s.requireSecret(http.HandlerFunc(s.handlePeerDiskIO)))
 
 	// Cross-node alert dedup: peers claim an incident and announce delivery here
 	// so only one node mails about a shared event (e.g. a third node going down).
@@ -147,6 +148,8 @@ func (s *server) registerDashboardRoutes(mux *http.ServeMux) {
 	protect("GET /api/nodes/{name}/disk", s.handleDisk)
 	protect("GET /api/nodes/{name}/network", s.handleNetwork)
 	protect("GET /api/nodes/{name}/network/history", s.handleNetworkHistory)
+	protect("GET /api/nodes/{name}/diskio", s.handleDiskIO)
+	protect("GET /api/nodes/{name}/diskio/history", s.handleDiskIOHistory)
 
 	// Runtime configuration, addressed per node. For the local node these operate
 	// on its own settings service; for a peer they proxy the same request to that
@@ -466,6 +469,25 @@ type netHistoryPoint struct {
 	At       string  `json:"at"`
 }
 
+// diskIODTO is one physical device's latest disk throughput/IOPS.
+type diskIODTO struct {
+	Device         string `json:"device"`
+	ReadBytesRate  uint64 `json:"read_bytes_rate"`
+	WriteBytesRate uint64 `json:"write_bytes_rate"`
+	ReadOpsRate    uint64 `json:"read_ops_rate"`
+	WriteOpsRate   uint64 `json:"write_ops_rate"`
+	At             string `json:"at"`
+}
+
+// diskIOHistoryPoint is throughput/IOPS aggregated across devices at one instant.
+type diskIOHistoryPoint struct {
+	ReadBytesRate  uint64 `json:"read_bytes_rate"`
+	WriteBytesRate uint64 `json:"write_bytes_rate"`
+	ReadOpsRate    uint64 `json:"read_ops_rate"`
+	WriteOpsRate   uint64 `json:"write_ops_rate"`
+	At             string `json:"at"`
+}
+
 func (s *server) diskForNode(name string) ([]diskDTO, error) {
 	rows, err := s.cfg.DB.DiskStatuses(name)
 	if err != nil {
@@ -556,6 +578,67 @@ func (s *server) handlePeerNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, n)
+}
+
+func (s *server) diskIOForNode(name string) ([]diskIODTO, error) {
+	rows, err := s.cfg.DB.LatestDiskIOSamples(name)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]diskIODTO, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, diskIODTO{
+			Device:         d.Device,
+			ReadBytesRate:  d.ReadBytesRate,
+			WriteBytesRate: d.WriteBytesRate,
+			ReadOpsRate:    d.ReadOpsRate,
+			WriteOpsRate:   d.WriteOpsRate,
+			At:             d.At.UTC().Format(time.RFC3339),
+		})
+	}
+	return out, nil
+}
+
+func (s *server) handleDiskIO(w http.ResponseWriter, r *http.Request) {
+	out, err := s.diskIOForNode(r.PathValue("name"))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *server) handleDiskIOHistory(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	minutes := queryInt(r, "minutes", 60)
+	limit := queryInt(r, "limit", 200)
+
+	since := time.Now().UTC().Add(-time.Duration(minutes) * time.Minute)
+	points, err := s.cfg.DB.DiskIOHistory(name, since, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	out := make([]diskIOHistoryPoint, 0, len(points))
+	for _, p := range points {
+		out = append(out, diskIOHistoryPoint{
+			ReadBytesRate:  p.ReadBytesRate,
+			WriteBytesRate: p.WriteBytesRate,
+			ReadOpsRate:    p.ReadOpsRate,
+			WriteOpsRate:   p.WriteOpsRate,
+			At:             p.At.UTC().Format(time.RFC3339),
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *server) handlePeerDiskIO(w http.ResponseWriter, r *http.Request) {
+	out, err := s.diskIOForNode(s.cfg.NodeName)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // --- Authentication ---

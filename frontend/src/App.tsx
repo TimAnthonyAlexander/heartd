@@ -6,6 +6,7 @@ import { TopBar } from './components/TopBar'
 import { MetricPanel } from './components/MetricPanel'
 import { DiskPanel } from './components/DiskPanel'
 import { NetworkPanel } from './components/NetworkPanel'
+import { DiskIOPanel } from './components/DiskIOPanel'
 import { ChecksTable } from './components/ChecksTable'
 import { AlertsPanel } from './components/AlertsPanel'
 import { NodeConfig, type ConfigTab, type EditTarget } from './components/NodeConfig'
@@ -189,6 +190,7 @@ export default function App({ username, onLogout }: AppProps) {
                 ) : null}
                 <DiskPanel disks={data.disk} dimmed={data.unreachable} />
                 <NetworkPanel net={data.net} series={data.netSeries} dimmed={data.unreachable} />
+                <DiskIOPanel io={data.diskio} series={data.diskioSeries} dimmed={data.unreachable} />
               </Box>
 
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
