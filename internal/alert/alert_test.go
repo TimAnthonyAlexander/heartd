@@ -258,32 +258,46 @@ func TestBuildEmailMessage(t *testing.T) {
 		SubjectPrefix: "[heartd]",
 	}
 	a := Alert{
-		Title:  "High CPU — web-01",
-		Detail: "CPU 95% >= 90%",
-		Time:   time.Date(2026, 6, 25, 19, 0, 0, 0, time.UTC),
+		Firing:   true,
+		Severity: "critical",
+		Node:     "web-01",
+		Title:    "High CPU — web-01",
+		Detail:   "CPU 95% >= 90%",
+		Time:     time.Date(2026, 6, 25, 19, 0, 0, 0, time.UTC),
 	}
 	msg := string(buildEmailMessage(cfg, a))
 
 	for _, want := range []string{
 		"From: heartd@example.com",
 		"To: ops@example.com, oncall@example.com",
-		"Subject: [heartd] High CPU — web-01",
-		"High CPU — web-01",
-		"CPU 95% >= 90%",
+		"Subject: 🔴 [heartd] High CPU — web-01", // firing/critical emoji in subject
+		"multipart/alternative",                  // both plain + HTML parts
+		"Content-Type: text/plain",
+		"Content-Type: text/html",
+		"High CPU — web-01",     // title in the plain part
+		"CPU 95% >= 90%",        // detail, literal (unescaped) in the plain part
 		"Time: 2026-06-25T19:00:00Z",
+		"CRITICAL",              // badge in the HTML card
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("email message missing %q\n---\n%s", want, msg)
 		}
 	}
+	// The HTML part must escape the detail's '>' so it can't break markup.
+	if !strings.Contains(msg, "CPU 95% &gt;= 90%") {
+		t.Errorf("HTML part should HTML-escape the detail:\n%s", msg)
+	}
 }
 
-func TestBuildEmailMessageNoPrefix(t *testing.T) {
+func TestBuildEmailMessageRecoveredNoPrefix(t *testing.T) {
 	cfg := config.EmailNotify{From: "a@b.c", To: []string{"x@y.z"}}
-	a := Alert{Title: "Node peer recovered", Time: time.Now()}
+	a := Alert{Title: "Node peer recovered", Firing: false, Time: time.Now()}
 	msg := string(buildEmailMessage(cfg, a))
-	if !strings.Contains(msg, "Subject: Node peer recovered") {
-		t.Errorf("subject should be trimmed with no prefix:\n%s", msg)
+	if !strings.Contains(msg, "Subject: ✅ Node peer recovered") {
+		t.Errorf("recovered subject should carry the ✅ emoji and no prefix:\n%s", msg)
+	}
+	if !strings.Contains(msg, "RECOVERED") {
+		t.Errorf("recovered alert should show the RECOVERED badge:\n%s", msg)
 	}
 }
 

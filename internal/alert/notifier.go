@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -192,24 +193,112 @@ func (e *EmailNotifier) Send(ctx context.Context, a Alert) error {
 	return c.Quit()
 }
 
-// buildEmailMessage constructs the raw RFC 822 message bytes for an alert. It is
-// pure (no I/O) so it can be unit-tested without a live SMTP server.
+// emailBoundary separates the plain-text and HTML parts of the multipart body.
+// A fixed token is fine: it's distinctive enough never to appear in alert text.
+const emailBoundary = "==heartd_a17c_alt_boundary=="
+
+// emailVisual maps an alert to its presentation: accent color, badge text, and a
+// subject emoji — red for firing/critical, amber for firing/warning, green for
+// recovered.
+func emailVisual(a Alert) (accent, badge, emoji string) {
+	if !a.Firing {
+		return "#30a46c", "RECOVERED", "✅"
+	}
+	if a.Severity == "critical" {
+		return "#e5484d", "CRITICAL", "🔴"
+	}
+	return "#f5a623", "WARNING", "🟠"
+}
+
+// buildEmailMessage constructs the raw RFC 822 message for an alert as a
+// multipart/alternative (plain text + a styled HTML card). Pure (no I/O) so it
+// can be unit-tested without a live SMTP server.
 func buildEmailMessage(cfg config.EmailNotify, a Alert) []byte {
-	subject := strings.TrimSpace(cfg.SubjectPrefix + " " + a.Title)
+	_, _, emoji := emailVisual(a)
+	subject := strings.TrimSpace(emoji + " " + strings.TrimSpace(cfg.SubjectPrefix+" "+a.Title))
+	when := a.Time.UTC().Format("2006-01-02T15:04:05Z07:00")
 
 	var b strings.Builder
 	b.WriteString("From: " + cfg.From + "\r\n")
 	b.WriteString("To: " + strings.Join(cfg.To, ", ") + "\r\n")
 	b.WriteString("Subject: " + subject + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
-	b.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n")
+	b.WriteString("Content-Type: multipart/alternative; boundary=\"" + emailBoundary + "\"\r\n")
 	b.WriteString("\r\n")
 
+	// Plain-text alternative (for clients that don't render HTML).
+	b.WriteString("--" + emailBoundary + "\r\n")
+	b.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n\r\n")
 	b.WriteString(a.Title + "\r\n")
 	if a.Detail != "" {
 		b.WriteString("\r\n" + a.Detail + "\r\n")
 	}
-	b.WriteString("\r\nTime: " + a.Time.UTC().Format("2006-01-02T15:04:05Z07:00") + "\r\n")
+	if a.Node != "" {
+		b.WriteString("\r\nNode: " + a.Node + "\r\n")
+	}
+	b.WriteString("Time: " + when + "\r\n")
 
+	// HTML alternative.
+	b.WriteString("\r\n--" + emailBoundary + "\r\n")
+	b.WriteString("Content-Type: text/html; charset=\"utf-8\"\r\n\r\n")
+	b.WriteString(emailHTML(a, when))
+
+	b.WriteString("\r\n--" + emailBoundary + "--\r\n")
 	return []byte(b.String())
+}
+
+// emailHTML renders the premium alert card. Styles are inline and the layout is
+// table-based for broad email-client compatibility.
+func emailHTML(a Alert, when string) string {
+	accent, badge, emoji := emailVisual(a)
+	esc := html.EscapeString
+
+	metaRow := func(label, value string) string {
+		if value == "" {
+			return ""
+		}
+		return `<tr>` +
+			`<td style="padding:6px 0;color:#8b93a0;font-size:13px;width:90px;">` + esc(label) + `</td>` +
+			`<td style="padding:6px 0;color:#e6e9ee;font-size:13px;font-weight:600;">` + esc(value) + `</td>` +
+			`</tr>`
+	}
+
+	severity := a.Severity
+	if severity == "" {
+		severity = "—"
+	}
+	detail := ""
+	if a.Detail != "" {
+		detail = `<tr><td style="padding:4px 28px 0;color:#aab2bd;font-size:14px;line-height:1.55;">` +
+			esc(a.Detail) + `</td></tr>`
+	}
+
+	return `<!doctype html><html><body style="margin:0;padding:0;background:#0d0f13;">` +
+		`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0d0f13;padding:28px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">` +
+		`<tr><td align="center">` +
+		`<table role="presentation" width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#15181d;border:1px solid #262b33;border-radius:16px;overflow:hidden;">` +
+		`<tr><td style="height:6px;background:` + accent + `;font-size:0;line-height:0;">&nbsp;</td></tr>` +
+		`<tr><td style="padding:26px 28px 0;">` +
+		`<span style="display:inline-block;padding:7px 14px;border-radius:999px;background:` + accent + `22;color:` + accent + `;font-size:12px;font-weight:800;letter-spacing:.09em;">` + emoji + `&nbsp;` + badge + `</span>` +
+		`</td></tr>` +
+		`<tr><td style="padding:16px 28px 0;color:#f3f5f8;font-size:21px;font-weight:700;line-height:1.3;letter-spacing:-0.01em;">` + esc(a.Title) + `</td></tr>` +
+		detail +
+		`<tr><td style="padding:22px 28px 4px;">` +
+		`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #262b33;">` +
+		`<tr><td style="height:14px;font-size:0;line-height:0;">&nbsp;</td></tr>` +
+		metaRow("Node", a.Node) +
+		metaRow("Target", entityLabel(a.Entity)) +
+		metaRow("Severity", strings.ToUpper(severity)) +
+		metaRow("When", when+" UTC") +
+		`</table></td></tr>` +
+		`<tr><td style="padding:20px 28px 26px;color:#5b636e;font-size:11px;letter-spacing:.03em;">Sent by heartd</td></tr>` +
+		`</table></td></tr></table></body></html>`
+}
+
+// entityLabel renders the alert's entity for display, blanking the "any" wildcard.
+func entityLabel(entity string) string {
+	if entity == "" || entity == "*" {
+		return ""
+	}
+	return entity
 }
