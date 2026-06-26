@@ -197,25 +197,26 @@ func (e *EmailNotifier) Send(ctx context.Context, a Alert) error {
 // A fixed token is fine: it's distinctive enough never to appear in alert text.
 const emailBoundary = "==heartd_a17c_alt_boundary=="
 
-// emailVisual maps an alert to its presentation: accent color, badge text, and a
-// subject emoji — red for firing/critical, amber for firing/warning, green for
-// recovered.
-func emailVisual(a Alert) (accent, badge, emoji string) {
+// emailVisual maps an alert to its presentation: a status label and the accent
+// colour used for it. Colours are deep enough to read against a light card and
+// stand in for real severity, not decoration — a deep red for critical, ochre
+// for warning, forest green for recovered.
+func emailVisual(a Alert) (accent, label string) {
 	if !a.Firing {
-		return "#30a46c", "RECOVERED", "✅"
+		return "#1f7a45", "RECOVERED"
 	}
 	if a.Severity == "critical" {
-		return "#e5484d", "CRITICAL", "🔴"
+		return "#b3261d", "CRITICAL"
 	}
-	return "#f5a623", "WARNING", "🟠"
+	return "#8a5512", "WARNING"
 }
 
 // buildEmailMessage constructs the raw RFC 822 message for an alert as a
 // multipart/alternative (plain text + a styled HTML card). Pure (no I/O) so it
 // can be unit-tested without a live SMTP server.
 func buildEmailMessage(cfg config.EmailNotify, a Alert) []byte {
-	_, _, emoji := emailVisual(a)
-	subject := strings.TrimSpace(emoji + " " + strings.TrimSpace(cfg.SubjectPrefix+" "+a.Title))
+	_, label := emailVisual(a)
+	subject := "[" + label + "] " + strings.TrimSpace(cfg.SubjectPrefix+" "+a.Title)
 	when := a.Time.UTC().Format("2006-01-02T15:04:05Z07:00")
 
 	var b strings.Builder
@@ -229,12 +230,15 @@ func buildEmailMessage(cfg config.EmailNotify, a Alert) []byte {
 	// Plain-text alternative (for clients that don't render HTML).
 	b.WriteString("--" + emailBoundary + "\r\n")
 	b.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n\r\n")
-	b.WriteString(a.Title + "\r\n")
+	b.WriteString("[" + label + "] " + a.Title + "\r\n")
 	if a.Detail != "" {
 		b.WriteString("\r\n" + a.Detail + "\r\n")
 	}
 	if a.Node != "" {
 		b.WriteString("\r\nNode: " + a.Node + "\r\n")
+	}
+	if t := entityLabel(a.Entity); t != "" {
+		b.WriteString("Target: " + t + "\r\n")
 	}
 	b.WriteString("Time: " + when + "\r\n")
 
@@ -247,51 +251,45 @@ func buildEmailMessage(cfg config.EmailNotify, a Alert) []byte {
 	return []byte(b.String())
 }
 
-// emailHTML renders the premium alert card. Styles are inline and the layout is
-// table-based for broad email-client compatibility.
+// emailHTML renders the alert as a plain, legible notice: a light card with a
+// single status-coloured spine on the left, a small status label, the title,
+// and a hairline-ruled table of facts. Styles are inline and the layout is
+// table-based for broad email-client compatibility. Colour appears only where
+// it carries meaning (the severity), never as decoration.
 func emailHTML(a Alert, when string) string {
-	accent, badge, emoji := emailVisual(a)
+	accent, label := emailVisual(a)
 	esc := html.EscapeString
 
-	metaRow := func(label, value string) string {
+	metaRow := func(name, value string) string {
 		if value == "" {
 			return ""
 		}
 		return `<tr>` +
-			`<td style="padding:6px 0;color:#8b93a0;font-size:13px;width:90px;">` + esc(label) + `</td>` +
-			`<td style="padding:6px 0;color:#e6e9ee;font-size:13px;font-weight:600;">` + esc(value) + `</td>` +
+			`<td style="padding:10px 0;border-top:1px solid #efece5;color:#8c877d;font-size:13px;width:84px;vertical-align:top;">` + esc(name) + `</td>` +
+			`<td style="padding:10px 0;border-top:1px solid #efece5;color:#322f2a;font-size:13px;font-weight:500;">` + esc(value) + `</td>` +
 			`</tr>`
 	}
 
-	severity := a.Severity
-	if severity == "" {
-		severity = "—"
-	}
 	detail := ""
 	if a.Detail != "" {
-		detail = `<tr><td style="padding:4px 28px 0;color:#aab2bd;font-size:14px;line-height:1.55;">` +
+		detail = `<tr><td style="padding:12px 32px 0;color:#5f5b53;font-size:14px;line-height:1.6;">` +
 			esc(a.Detail) + `</td></tr>`
 	}
 
-	return `<!doctype html><html><body style="margin:0;padding:0;background:#0d0f13;">` +
-		`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0d0f13;padding:28px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">` +
+	return `<!doctype html><html><body style="margin:0;padding:0;background:#f4f2ee;">` +
+		`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f2ee;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">` +
 		`<tr><td align="center">` +
-		`<table role="presentation" width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#15181d;border:1px solid #262b33;border-radius:16px;overflow:hidden;">` +
-		`<tr><td style="height:6px;background:` + accent + `;font-size:0;line-height:0;">&nbsp;</td></tr>` +
-		`<tr><td style="padding:26px 28px 0;">` +
-		`<span style="display:inline-block;padding:7px 14px;border-radius:999px;background:` + accent + `22;color:` + accent + `;font-size:12px;font-weight:800;letter-spacing:.09em;">` + emoji + `&nbsp;` + badge + `</span>` +
-		`</td></tr>` +
-		`<tr><td style="padding:16px 28px 0;color:#f3f5f8;font-size:21px;font-weight:700;line-height:1.3;letter-spacing:-0.01em;">` + esc(a.Title) + `</td></tr>` +
+		`<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#ffffff;border:1px solid #e7e2d8;border-left:3px solid ` + accent + `;border-radius:4px;">` +
+		`<tr><td style="padding:28px 32px 0;color:` + accent + `;font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;">` + label + `</td></tr>` +
+		`<tr><td style="padding:8px 32px 0;color:#211f1c;font-size:20px;font-weight:600;line-height:1.35;">` + esc(a.Title) + `</td></tr>` +
 		detail +
-		`<tr><td style="padding:22px 28px 4px;">` +
-		`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #262b33;">` +
-		`<tr><td style="height:14px;font-size:0;line-height:0;">&nbsp;</td></tr>` +
+		`<tr><td style="padding:24px 32px 6px;">` +
+		`<table role="presentation" width="100%" cellpadding="0" cellspacing="0">` +
 		metaRow("Node", a.Node) +
 		metaRow("Target", entityLabel(a.Entity)) +
-		metaRow("Severity", strings.ToUpper(severity)) +
 		metaRow("When", when+" UTC") +
 		`</table></td></tr>` +
-		`<tr><td style="padding:20px 28px 26px;color:#5b636e;font-size:11px;letter-spacing:.03em;">Sent by heartd</td></tr>` +
+		`<tr><td style="padding:18px 32px 26px;color:#9b958a;font-size:12px;line-height:1.5;">heartd · automated monitoring alert</td></tr>` +
 		`</table></td></tr></table></body></html>`
 }
 

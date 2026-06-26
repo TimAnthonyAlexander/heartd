@@ -270,14 +270,14 @@ func TestBuildEmailMessage(t *testing.T) {
 	for _, want := range []string{
 		"From: heartd@example.com",
 		"To: ops@example.com, oncall@example.com",
-		"Subject: 🔴 [heartd] High CPU — web-01", // firing/critical emoji in subject
-		"multipart/alternative",                  // both plain + HTML parts
+		"Subject: [CRITICAL] [heartd] High CPU — web-01", // firing/critical status tag in subject
+		"multipart/alternative",                          // both plain + HTML parts
 		"Content-Type: text/plain",
 		"Content-Type: text/html",
 		"High CPU — web-01",     // title in the plain part
 		"CPU 95% >= 90%",        // detail, literal (unescaped) in the plain part
 		"Time: 2026-06-25T19:00:00Z",
-		"CRITICAL",              // badge in the HTML card
+		"CRITICAL",              // status label in the HTML card
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("email message missing %q\n---\n%s", want, msg)
@@ -293,11 +293,11 @@ func TestBuildEmailMessageRecoveredNoPrefix(t *testing.T) {
 	cfg := config.EmailNotify{From: "a@b.c", To: []string{"x@y.z"}}
 	a := Alert{Title: "Node peer recovered", Firing: false, Time: time.Now()}
 	msg := string(buildEmailMessage(cfg, a))
-	if !strings.Contains(msg, "Subject: ✅ Node peer recovered") {
-		t.Errorf("recovered subject should carry the ✅ emoji and no prefix:\n%s", msg)
+	if !strings.Contains(msg, "Subject: [RECOVERED] Node peer recovered") {
+		t.Errorf("recovered subject should carry the [RECOVERED] tag and no prefix:\n%s", msg)
 	}
 	if !strings.Contains(msg, "RECOVERED") {
-		t.Errorf("recovered alert should show the RECOVERED badge:\n%s", msg)
+		t.Errorf("recovered alert should show the RECOVERED status label:\n%s", msg)
 	}
 }
 
