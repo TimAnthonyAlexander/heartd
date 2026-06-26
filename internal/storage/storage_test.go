@@ -247,7 +247,7 @@ func TestPrune(t *testing.T) {
 	if len(remaining) != 2 {
 		t.Fatalf("remaining = %d, want 2", len(remaining))
 	}
-	if !remaining[0].At.Equal(base.Add(3*time.Minute)) {
+	if !remaining[0].At.Equal(base.Add(3 * time.Minute)) {
 		t.Fatalf("oldest remaining = %v, want %v", remaining[0].At, base.Add(3*time.Minute))
 	}
 

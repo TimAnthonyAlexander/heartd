@@ -9,9 +9,9 @@ import (
 // CheckStatus is the latest known status of one service check.
 type CheckStatus struct {
 	Node      string
-	Name      string    // check name (unique per node)
-	Type      string    // http|tcp|process|shell
-	Status    string    // "ok" | "failing" | "unknown"
+	Name      string // check name (unique per node)
+	Type      string // http|tcp|process|shell
+	Status    string // "ok" | "failing" | "unknown"
 	Detail    string
 	LatencyMS int64
 	At        time.Time // when last evaluated (UTC)

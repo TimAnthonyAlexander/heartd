@@ -274,10 +274,10 @@ func TestBuildEmailMessage(t *testing.T) {
 		"multipart/alternative",                          // both plain + HTML parts
 		"Content-Type: text/plain",
 		"Content-Type: text/html",
-		"High CPU — web-01",     // title in the plain part
-		"CPU 95% >= 90%",        // detail, literal (unescaped) in the plain part
+		"High CPU — web-01", // title in the plain part
+		"CPU 95% >= 90%",    // detail, literal (unescaped) in the plain part
 		"Time: 2026-06-25T19:00:00Z",
-		"CRITICAL",              // status label in the HTML card
+		"CRITICAL", // status label in the HTML card
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("email message missing %q\n---\n%s", want, msg)
