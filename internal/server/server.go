@@ -215,7 +215,8 @@ func (s *server) proxyToPeer(w http.ResponseWriter, r *http.Request, path string
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown node"})
 		return
 	}
-	if peer.URL == "" || peer.Secret == "" {
+	secret := s.outboundSecret(peer)
+	if peer.URL == "" || secret == "" {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "peer is not configured for remote edits (missing url or shared secret)"})
 		return
 	}
@@ -234,7 +235,7 @@ func (s *server) proxyToPeer(w http.ResponseWriter, r *http.Request, path string
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(cluster.SecretHeader, peer.Secret)
+	req.Header.Set(cluster.SecretHeader, secret)
 
 	resp, err := s.proxyClient.Do(req)
 	if err != nil {
@@ -262,12 +263,33 @@ func (s *server) peerByName(name string) (storage.Peer, bool, error) {
 	return storage.Peer{}, false, nil
 }
 
+// outboundSecret returns the secret to present to a peer on node-to-node calls:
+// the peer's own per-link secret, else the configured cluster secret, else the
+// secret the peer table already shares. Mirrors the poller's fallback so a
+// gossip-discovered peer (which carries no per-link secret) can still be renamed
+// and remotely managed.
+func (s *server) outboundSecret(peer storage.Peer) string {
+	if peer.Secret != "" {
+		return peer.Secret
+	}
+	for _, sec := range s.cfg.ExtraSecrets {
+		if sec != "" {
+			return sec
+		}
+	}
+	if peers, err := s.cfg.DB.ListPeers(); err == nil {
+		return storage.CommonSecret(peers)
+	}
+	return ""
+}
+
 // pushAliasToPeer writes a node's display name on the node itself, over the
 // shared-secret link, so the rename is authoritative and propagates to the whole
 // cluster from its owner. Returns an error string suitable for the API response,
 // or "" on success.
 func (s *server) pushAliasToPeer(peer storage.Peer, alias string) string {
-	if peer.URL == "" || peer.Secret == "" {
+	secret := s.outboundSecret(peer)
+	if peer.URL == "" || secret == "" {
 		return "peer is not configured for remote edits (missing url or shared secret)"
 	}
 	body, _ := json.Marshal(aliasInput{Alias: alias})
@@ -278,7 +300,7 @@ func (s *server) pushAliasToPeer(peer storage.Peer, alias string) string {
 		return err.Error()
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(cluster.SecretHeader, peer.Secret)
+	req.Header.Set(cluster.SecretHeader, secret)
 	resp, err := s.proxyClient.Do(req)
 	if err != nil {
 		return "peer unreachable: " + err.Error()
@@ -1078,11 +1100,13 @@ func (s *server) handlePeerWhoami(w http.ResponseWriter, r *http.Request) {
 // advertised alias so the label propagates across the cluster. DisplayName falls
 // back to the real name when no distinct label is set.
 func (s *server) handlePeerIdentity(w http.ResponseWriter, r *http.Request) {
-	display := s.cfg.NodeName
+	// DisplayName is the node's OWN alias, or "" when it has none. It must NEVER
+	// fall back to the real name: a poller caches a non-empty DisplayName as this
+	// node's alias, so returning the hostname here would overwrite every
+	// dashboard's label with the hostname.
+	display := ""
 	if aliases, err := s.cfg.DB.NodeAliases(); err == nil {
-		if a := aliases[s.cfg.NodeName]; a != "" {
-			display = a
-		}
+		display = aliases[s.cfg.NodeName]
 	}
 	writeJSON(w, http.StatusOK, cluster.Identity{Name: s.cfg.NodeName, DisplayName: display})
 }

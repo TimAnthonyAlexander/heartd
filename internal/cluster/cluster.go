@@ -361,18 +361,20 @@ func (p *Poller) storePeerDiskIO(ctx context.Context, peer storage.Peer) {
 	}
 }
 
-// storePeerIdentity fetches a peer's self-advertised display name and caches it
-// as that peer's name, so a name set once on a node converges to the same label
-// on every dashboard. A blank name, or one equal to the peer's real name, clears
-// the cached name (the peer advertises no distinct label). This overwrites every
-// poll, so it also self-heals any stale local label. Best-effort: a failure here
-// does not affect the rest of the poll.
+// storePeerIdentity caches a peer's self-advertised display name under that
+// peer's local row name, so a name set once on a node converges to the same
+// label on every dashboard. The peer is the single source of truth: a non-empty
+// advertised name is cached verbatim, and an empty one clears the cache (the peer
+// has no distinct label, so the dashboard shows its real name). The advertised
+// value is already "" when no alias is set — it is NEVER the peer's hostname — so
+// there is no comparison to make here. Best-effort: a failure does not affect the
+// rest of the poll.
 func (p *Poller) storePeerIdentity(ctx context.Context, peer storage.Peer) {
 	var id Identity
 	if err := p.getJSON(ctx, peer, "/api/peer/identity", &id); err != nil {
 		return
 	}
-	if id.DisplayName != "" && id.DisplayName != peer.Name {
+	if id.DisplayName != "" {
 		if err := p.db.SetNodeAlias(peer.Name, id.DisplayName); err != nil {
 			log.Printf("cluster: cache peer %q display name failed: %v", peer.Name, err)
 		}

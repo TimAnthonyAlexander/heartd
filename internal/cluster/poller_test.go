@@ -174,3 +174,51 @@ func TestEffectiveSecretAutoDerivesFromPeers(t *testing.T) {
 		t.Errorf("peer with own secret resolved to %q, want %q", got, "own")
 	}
 }
+
+// TestStorePeerIdentityNeverCachesHostname is the regression guard for the
+// revert-to-hostname bug: when a node advertises an empty display name, the
+// poller CLEARS the cached alias — it must never store the node's real name as
+// an alias, even when the local row label differs from the node's canonical name.
+func TestStorePeerIdentityNeverCachesHostname(t *testing.T) {
+	db := openTestDB(t)
+	display := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/peer/identity" {
+			_ = json.NewEncoder(w).Encode(Identity{Name: "real-hostname", DisplayName: display})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	// Stored under a LOCAL label that differs from the node's canonical name —
+	// exactly the condition that triggered the bug.
+	peer := storage.Peer{Name: "my-label", URL: srv.URL, Secret: "s"}
+	if err := db.UpsertPeer(peer); err != nil {
+		t.Fatal(err)
+	}
+	p := New(db, "node-self", "", "", settings.New(db))
+	p.refreshFallback()
+
+	aliasOf := func() string {
+		m, err := db.NodeAliases()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m["my-label"]
+	}
+
+	// Node advertises a real alias → cached verbatim under the local label.
+	display = "Pretty Name"
+	p.storePeerIdentity(context.Background(), peer)
+	if got := aliasOf(); got != "Pretty Name" {
+		t.Fatalf("alias = %q, want %q", got, "Pretty Name")
+	}
+
+	// Node clears its alias → cache cleared, NOT set to the hostname.
+	display = ""
+	p.storePeerIdentity(context.Background(), peer)
+	if got := aliasOf(); got != "" {
+		t.Fatalf("alias = %q, want empty (must never cache the hostname)", got)
+	}
+}

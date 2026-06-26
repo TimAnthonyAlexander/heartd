@@ -181,3 +181,35 @@ func TestDeletePeerClearsAlias(t *testing.T) {
 		t.Fatalf("alias should be removed with the peer, got %v", aliases)
 	}
 }
+
+// handlePeerIdentity must advertise an EMPTY display name when the node has no
+// alias — never its real name. Returning the hostname here caused every polling
+// dashboard to cache the hostname as the node's alias (the revert-to-hostname bug).
+func TestPeerIdentityEmptyWhenNoAlias(t *testing.T) {
+	db := testDB(t)
+	s := localServer("web-01", db, settings.New(db))
+
+	rec := httptest.NewRecorder()
+	s.handlePeerIdentity(rec, httptest.NewRequest(http.MethodGet, "/api/peer/identity", nil))
+	var id cluster.Identity
+	if err := json.NewDecoder(rec.Body).Decode(&id); err != nil {
+		t.Fatal(err)
+	}
+	if id.Name != "web-01" {
+		t.Errorf("identity name = %q, want %q", id.Name, "web-01")
+	}
+	if id.DisplayName != "" {
+		t.Errorf("display name = %q, want empty when no alias is set", id.DisplayName)
+	}
+
+	// With an alias set, it advertises that.
+	if err := db.SetNodeAlias("web-01", "Production web"); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	s.handlePeerIdentity(rec, httptest.NewRequest(http.MethodGet, "/api/peer/identity", nil))
+	_ = json.NewDecoder(rec.Body).Decode(&id)
+	if id.DisplayName != "Production web" {
+		t.Errorf("display name = %q, want %q", id.DisplayName, "Production web")
+	}
+}
