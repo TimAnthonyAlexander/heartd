@@ -2,6 +2,7 @@ import { Box, LinearProgress, Paper, Typography } from '@mui/material'
 import {
   Area,
   AreaChart,
+  Brush,
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
@@ -78,7 +79,7 @@ export function MetricPanel({ title, headline, percent, data, dimmed }: Props) {
         }}
       />
 
-      <Box sx={{ height: 150, mt: 2, mx: -1 }}>
+      <Box sx={{ height: 174, mt: 2, mx: -1 }}>
         {data.length < 2 ? (
           <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Typography sx={{ fontSize: 12, color: colors.textFaint }}>
@@ -114,6 +115,15 @@ export function MetricPanel({ title, headline, percent, data, dimmed }: Props) {
                 strokeWidth={2}
                 fill={`url(#${gradId})`}
                 isAnimationActive={false}
+              />
+              <Brush
+                dataKey="t"
+                height={14}
+                travellerWidth={8}
+                gap={4}
+                stroke={colors.textFaint}
+                fill={colors.bg}
+                tickFormatter={fmtTime}
               />
             </AreaChart>
           </ResponsiveContainer>

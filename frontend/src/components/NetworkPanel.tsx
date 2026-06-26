@@ -1,5 +1,6 @@
 import { Box, Paper, Typography } from '@mui/material'
 import {
+  Brush,
   CartesianGrid,
   Line,
   LineChart,
@@ -59,7 +60,7 @@ export function NetworkPanel({ net, series, dimmed }: Props) {
         )}
       </Box>
 
-      <Box sx={{ height: 180, mt: 2, mx: -1 }}>
+      <Box sx={{ height: 200, mt: 2, mx: -1 }}>
         {series.length < 2 ? (
           <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Typography sx={{ fontSize: 12, color: colors.textFaint }}>collecting data…</Typography>
@@ -82,6 +83,15 @@ export function NetworkPanel({ net, series, dimmed }: Props) {
               <Tooltip content={<NetTooltip />} cursor={{ stroke: colors.border }} />
               <Line type="monotone" dataKey="recv" stroke={RECV} strokeWidth={2} dot={false} isAnimationActive={false} />
               <Line type="monotone" dataKey="sent" stroke={SENT} strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Brush
+                dataKey="t"
+                height={14}
+                travellerWidth={8}
+                gap={4}
+                stroke={colors.textFaint}
+                fill={colors.bg}
+                tickFormatter={fmtTime}
+              />
             </LineChart>
           </ResponsiveContainer>
         )}

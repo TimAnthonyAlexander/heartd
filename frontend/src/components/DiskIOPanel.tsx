@@ -1,5 +1,6 @@
 import { Box, Paper, Typography } from '@mui/material'
 import {
+  Brush,
   CartesianGrid,
   Line,
   LineChart,
@@ -73,7 +74,7 @@ export function DiskIOPanel({ io, series, dimmed }: Props) {
         </Box>
       )}
 
-      <Box sx={{ height: 168, mt: 1.5, mx: -1 }}>
+      <Box sx={{ height: 188, mt: 1.5, mx: -1 }}>
         {series.length < 2 ? (
           <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Typography sx={{ fontSize: 12, color: colors.textFaint }}>collecting data…</Typography>
@@ -96,6 +97,15 @@ export function DiskIOPanel({ io, series, dimmed }: Props) {
               <Tooltip content={<IOTooltip />} cursor={{ stroke: colors.border }} />
               <Line type="monotone" dataKey="read" stroke={READ} strokeWidth={2} dot={false} isAnimationActive={false} />
               <Line type="monotone" dataKey="write" stroke={WRITE} strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Brush
+                dataKey="t"
+                height={14}
+                travellerWidth={8}
+                gap={4}
+                stroke={colors.textFaint}
+                fill={colors.bg}
+                tickFormatter={fmtTime}
+              />
             </LineChart>
           </ResponsiveContainer>
         )}

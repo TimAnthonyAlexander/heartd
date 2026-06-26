@@ -188,6 +188,37 @@ ORDER BY at ASC, id ASC;`
 	return samples, nil
 }
 
+// NetSamplesWindow returns net samples for node within [from, to] (inclusive),
+// downsampled to at most maxPoints by time-bucket decimation (earliest sample
+// per bucket kept), ordered oldest-first. Mirrors MetricsWindow so long ranges
+// stay bounded.
+func (db *DB) NetSamplesWindow(node string, from, to time.Time, maxPoints int) ([]NetSample, error) {
+	fromUnix := from.UTC().Unix()
+	toUnix := to.UTC().Unix()
+	bucket := bucketSize(fromUnix, toUnix, maxPoints)
+
+	const q = `
+SELECT node, recv_bytes, sent_bytes, recv_rate, sent_rate, at
+FROM net_sample
+WHERE node = ? AND at >= ? AND at <= ? AND id IN (
+    SELECT MIN(id) FROM net_sample
+    WHERE node = ? AND at >= ? AND at <= ?
+    GROUP BY (at - ?) / ?
+)
+ORDER BY at ASC, id ASC;`
+	rows, err := db.conn.Query(q, node, fromUnix, toUnix, node, fromUnix, toUnix, fromUnix, bucket)
+	if err != nil {
+		return nil, fmt.Errorf("storage: query net samples window for node %q: %w", node, err)
+	}
+	defer rows.Close()
+
+	samples, err := scanNetSamples(rows)
+	if err != nil {
+		return nil, fmt.Errorf("storage: scan net samples window for node %q: %w", node, err)
+	}
+	return samples, nil
+}
+
 // LatestNetSample returns the single most recent sample for node, or
 // (zero, false, nil) if none exists.
 func (db *DB) LatestNetSample(node string) (NetSample, bool, error) {

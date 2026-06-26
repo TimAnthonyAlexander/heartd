@@ -212,13 +212,17 @@ export function fetchMetrics(nodeName: string, signal?: AbortSignal): Promise<Me
   return getJSON<Metrics>(`/api/nodes/${encodeURIComponent(nodeName)}/metrics`, signal)
 }
 
+// History queries take an absolute [fromSec, toSec] epoch-second window; the
+// server downsamples it to a bounded number of points so long ranges (up to the
+// 7-day retention) stay renderable.
 export function fetchHistory(
   nodeName: string,
-  minutes = 60,
+  fromSec: number,
+  toSec: number,
   signal?: AbortSignal,
 ): Promise<HistoryPoint[]> {
   return getJSON<HistoryPoint[]>(
-    `/api/nodes/${encodeURIComponent(nodeName)}/metrics/history?minutes=${minutes}`,
+    `/api/nodes/${encodeURIComponent(nodeName)}/metrics/history?from=${fromSec}&to=${toSec}`,
     signal,
   )
 }
@@ -259,11 +263,12 @@ export function fetchNetwork(nodeName: string, signal?: AbortSignal): Promise<Ne
 
 export function fetchNetworkHistory(
   nodeName: string,
-  minutes = 60,
+  fromSec: number,
+  toSec: number,
   signal?: AbortSignal,
 ): Promise<NetHistoryPoint[]> {
   return getJSON<NetHistoryPoint[]>(
-    `/api/nodes/${encodeURIComponent(nodeName)}/network/history?minutes=${minutes}`,
+    `/api/nodes/${encodeURIComponent(nodeName)}/network/history?from=${fromSec}&to=${toSec}`,
     signal,
   )
 }
@@ -293,11 +298,12 @@ export function fetchDiskIO(nodeName: string, signal?: AbortSignal): Promise<Dis
 
 export function fetchDiskIOHistory(
   nodeName: string,
-  minutes = 60,
+  fromSec: number,
+  toSec: number,
   signal?: AbortSignal,
 ): Promise<DiskIOHistoryPoint[]> {
   return getJSON<DiskIOHistoryPoint[]>(
-    `/api/nodes/${encodeURIComponent(nodeName)}/diskio/history?minutes=${minutes}`,
+    `/api/nodes/${encodeURIComponent(nodeName)}/diskio/history?from=${fromSec}&to=${toSec}`,
     signal,
   )
 }

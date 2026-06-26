@@ -1,5 +1,6 @@
 import { Box, Paper, Typography } from '@mui/material'
 import {
+  Brush,
   CartesianGrid,
   Line,
   LineChart,
@@ -65,7 +66,7 @@ export function LoadPanel({ load1, load5, load15, series, dimmed }: Props) {
         <Typography sx={{ fontSize: 11, color: colors.textFaint }}>15m</Typography>
       </Box>
 
-      <Box sx={{ height: 168, mt: 1.5, mx: -1 }}>
+      <Box sx={{ height: 188, mt: 1.5, mx: -1 }}>
         {series.length < 2 || !hasData ? (
           <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Typography sx={{ fontSize: 12, color: colors.textFaint }}>
@@ -91,6 +92,15 @@ export function LoadPanel({ load1, load5, load15, series, dimmed }: Props) {
               <Line type="monotone" dataKey="load1" stroke={ONE} strokeWidth={2} dot={false} isAnimationActive={false} />
               <Line type="monotone" dataKey="load5" stroke={FIVE} strokeWidth={2} dot={false} isAnimationActive={false} />
               <Line type="monotone" dataKey="load15" stroke={FIFTEEN} strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Brush
+                dataKey="t"
+                height={14}
+                travellerWidth={8}
+                gap={4}
+                stroke={colors.textFaint}
+                fill={colors.bg}
+                tickFormatter={fmtTime}
+              />
             </LineChart>
           </ResponsiveContainer>
         )}

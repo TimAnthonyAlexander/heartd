@@ -14,9 +14,18 @@ import {
   type Metrics,
   type NetCurrent,
 } from '../api'
+import { resolveWindow, type TimeRange } from '../timerange'
 
 const POLL_MS = 3000
-const MAX_POINTS = 400
+// Cap on live-appended points per series. The server downsamples the seed to a
+// bounded count; this bounds the live tail on top of it for long ranges.
+const MAX_POINTS = 1000
+
+// appendLive adds a fresh point to a live series, trimming anything that has
+// scrolled out of the rolling window and capping the total length.
+function appendLive<T extends { t: number }>(arr: T[], pt: T, cutoff: number): T[] {
+  return [...arr, pt].filter((p) => p.t >= cutoff).slice(-MAX_POINTS)
+}
 
 export interface ChartPoint {
   t: number // epoch ms
@@ -106,7 +115,7 @@ function sumDiskIO(rows: DiskIODevice[]): DiskIOTotals | null {
 // self-scheduling timer (no overlap), aborting in-flight requests on change.
 export function useNodeData(
   node: string | null,
-  rangeMinutes: number,
+  range: TimeRange,
   paused: boolean,
 ): NodeData {
   const [data, setData] = useState<NodeData>(EMPTY)
@@ -125,10 +134,11 @@ export function useNodeData(
 
     const seed = async () => {
       try {
+        const { fromSec, toSec } = resolveWindow(range)
         const [hist, netHist, ioHist] = await Promise.all([
-          fetchHistory(node, rangeMinutes, controller.signal),
-          fetchNetworkHistory(node, rangeMinutes, controller.signal),
-          fetchDiskIOHistory(node, rangeMinutes, controller.signal),
+          fetchHistory(node, fromSec, toSec, controller.signal),
+          fetchNetworkHistory(node, fromSec, toSec, controller.signal),
+          fetchDiskIOHistory(node, fromSec, toSec, controller.signal),
         ])
         if (!active) return
         const series = hist.map<ChartPoint>((p) => ({
@@ -181,24 +191,45 @@ export function useNodeData(
           load15: m.load15,
         }
         setData((d) => {
+          // For a fixed (past) range the chart is static: keep the seeded series
+          // and only refresh the headline/tables below. Live ranges append and
+          // trim to the rolling window.
+          if (!range.live) {
+            return {
+              metrics: m,
+              series: d.series,
+              checks: cs,
+              disk,
+              net,
+              netSeries: d.netSeries,
+              diskio,
+              diskioSeries: d.diskioSeries,
+              loading: false,
+              unreachable: false,
+              lastUpdated: Date.now(),
+            }
+          }
+
+          const cutoff = Date.now() - range.spanMs
+
           // Skip duplicate points: /metrics returns the latest persisted sample,
           // which only advances every metrics_interval (slower than our poll).
           const lastT = d.series[d.series.length - 1]?.t
-          const series = lastT === point.t ? d.series : [...d.series, point].slice(-MAX_POINTS)
+          const series = lastT === point.t ? d.series : appendLive(d.series, point, cutoff)
 
           const netT = net ? new Date(net.at).getTime() : null
           const lastNetT = d.netSeries[d.netSeries.length - 1]?.t
           const netSeries =
             net && netT !== lastNetT
-              ? [...d.netSeries, { t: netT!, recv: net.recv_rate, sent: net.sent_rate }].slice(-MAX_POINTS)
+              ? appendLive(d.netSeries, { t: netT!, recv: net.recv_rate, sent: net.sent_rate }, cutoff)
               : d.netSeries
 
           const ioT = diskio ? new Date(diskio.at).getTime() : null
           const lastIoT = d.diskioSeries[d.diskioSeries.length - 1]?.t
           const diskioSeries =
             diskio && ioT !== lastIoT
-              ? [
-                  ...d.diskioSeries,
+              ? appendLive(
+                  d.diskioSeries,
                   {
                     t: ioT!,
                     read: diskio.read,
@@ -206,7 +237,8 @@ export function useNodeData(
                     readOps: diskio.readOps,
                     writeOps: diskio.writeOps,
                   },
-                ].slice(-MAX_POINTS)
+                  cutoff,
+                )
               : d.diskioSeries
           return {
             metrics: m,
@@ -227,7 +259,8 @@ export function useNodeData(
         // Mark unreachable but keep the last data so the UI can dim it.
         setData((d) => ({ ...d, loading: false, unreachable: true }))
       } finally {
-        if (active && !paused) timer = setTimeout(tick, POLL_MS)
+        // Only keep polling for live ranges; a fixed past window is static.
+        if (active && !paused && range.live) timer = setTimeout(tick, POLL_MS)
       }
     }
 
@@ -239,7 +272,7 @@ export function useNodeData(
       clearTimeout(timer)
       controller.abort()
     }
-  }, [node, rangeMinutes, paused])
+  }, [node, range, paused])
 
   return data
 }

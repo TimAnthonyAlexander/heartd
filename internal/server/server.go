@@ -361,11 +361,19 @@ type historyPoint struct {
 // Query params: minutes (default 60), limit (default 200).
 func (s *server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	minutes := queryInt(r, "minutes", 60)
-	limit := queryInt(r, "limit", 200)
 
-	since := time.Now().UTC().Add(-time.Duration(minutes) * time.Minute)
-	samples, err := s.cfg.DB.RecentMetrics(name, since, limit)
+	var (
+		samples []storage.MetricSample
+		err     error
+	)
+	if from, to, ok := historyWindow(r); ok {
+		samples, err = s.cfg.DB.MetricsWindow(name, from, to, maxHistoryPoints)
+	} else {
+		minutes := queryInt(r, "minutes", 60)
+		limit := queryInt(r, "limit", 200)
+		since := time.Now().UTC().Add(-time.Duration(minutes) * time.Minute)
+		samples, err = s.cfg.DB.RecentMetrics(name, since, limit)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -468,6 +476,43 @@ func queryInt(r *http.Request, key string, def int) int {
 	return def
 }
 
+func queryInt64(r *http.Request, key string) (int64, bool) {
+	if v := r.URL.Query().Get(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+const (
+	// maxHistoryPoints caps the number of points a windowed history query returns,
+	// via time-bucket downsampling, so a 7-day range stays renderable.
+	maxHistoryPoints = 500
+	// maxHistoryWindow is the furthest back a windowed query may reach (the
+	// retention horizon), clamping the lower bound of a client-supplied window.
+	maxHistoryWindow = 7 * 24 * time.Hour
+)
+
+// historyWindow parses optional from/to (unix epoch seconds) query params shared
+// by the metrics/network/diskio history endpoints. It returns the [from, to]
+// window and true only when both are present and to > from; the lower bound is
+// clamped to the retention horizon so a stale client can't request an unbounded
+// span. When absent the caller keeps its legacy minutes/limit behavior.
+func historyWindow(r *http.Request) (time.Time, time.Time, bool) {
+	fromSec, okF := queryInt64(r, "from")
+	toSec, okT := queryInt64(r, "to")
+	if !okF || !okT || toSec <= fromSec {
+		return time.Time{}, time.Time{}, false
+	}
+	from := time.Unix(fromSec, 0).UTC()
+	to := time.Unix(toSec, 0).UTC()
+	if earliest := time.Now().UTC().Add(-maxHistoryWindow); from.Before(earliest) {
+		from = earliest
+	}
+	return from, to, true
+}
+
 // diskDTO is one mount's current usage.
 type diskDTO struct {
 	Mount   string  `json:"mount"`
@@ -562,11 +607,19 @@ func (s *server) handleNetwork(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleNetworkHistory(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	minutes := queryInt(r, "minutes", 60)
-	limit := queryInt(r, "limit", 200)
 
-	since := time.Now().UTC().Add(-time.Duration(minutes) * time.Minute)
-	samples, err := s.cfg.DB.RecentNetSamples(name, since, limit)
+	var (
+		samples []storage.NetSample
+		err     error
+	)
+	if from, to, ok := historyWindow(r); ok {
+		samples, err = s.cfg.DB.NetSamplesWindow(name, from, to, maxHistoryPoints)
+	} else {
+		minutes := queryInt(r, "minutes", 60)
+		limit := queryInt(r, "limit", 200)
+		since := time.Now().UTC().Add(-time.Duration(minutes) * time.Minute)
+		samples, err = s.cfg.DB.RecentNetSamples(name, since, limit)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -633,11 +686,19 @@ func (s *server) handleDiskIO(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleDiskIOHistory(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	minutes := queryInt(r, "minutes", 60)
-	limit := queryInt(r, "limit", 200)
 
-	since := time.Now().UTC().Add(-time.Duration(minutes) * time.Minute)
-	points, err := s.cfg.DB.DiskIOHistory(name, since, limit)
+	var (
+		points []storage.DiskIOPoint
+		err    error
+	)
+	if from, to, ok := historyWindow(r); ok {
+		points, err = s.cfg.DB.DiskIOWindow(name, from, to, maxHistoryPoints)
+	} else {
+		minutes := queryInt(r, "minutes", 60)
+		limit := queryInt(r, "limit", 200)
+		since := time.Now().UTC().Add(-time.Duration(minutes) * time.Minute)
+		points, err = s.cfg.DB.DiskIOHistory(name, since, limit)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

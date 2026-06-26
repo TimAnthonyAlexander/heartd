@@ -32,6 +32,48 @@ func sampleAt(node string, at time.Time) MetricSample {
 	}
 }
 
+func TestMetricsWindowBoundsAndDownsampling(t *testing.T) {
+	db := openTestDB(t)
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Insert 100 samples one minute apart (minutes 0..99).
+	for i := 0; i < 100; i++ {
+		if err := db.InsertMetric(sampleAt("a", base.Add(time.Duration(i)*time.Minute))); err != nil {
+			t.Fatalf("InsertMetric %d: %v", i, err)
+		}
+	}
+
+	// Window minutes 10..19 inclusive: both bounds must be respected.
+	from := base.Add(10 * time.Minute)
+	to := base.Add(19 * time.Minute)
+	got, err := db.MetricsWindow("a", from, to, 500)
+	if err != nil {
+		t.Fatalf("MetricsWindow: %v", err)
+	}
+	if len(got) != 10 {
+		t.Fatalf("window 10..19: got %d points, want 10", len(got))
+	}
+	if !got[0].At.Equal(from) || !got[len(got)-1].At.Equal(to) {
+		t.Fatalf("window bounds: got [%v..%v], want [%v..%v]", got[0].At, got[len(got)-1].At, from, to)
+	}
+
+	// Downsampling: full window (minutes 0..99, 100 raw samples) capped to 10
+	// points must collapse to about 10 (at most maxPoints+1), oldest-first, all
+	// within the window.
+	ds, err := db.MetricsWindow("a", base, base.Add(99*time.Minute), 10)
+	if err != nil {
+		t.Fatalf("MetricsWindow downsample: %v", err)
+	}
+	if len(ds) == 0 || len(ds) > 11 {
+		t.Fatalf("downsample: got %d points, want 1..11", len(ds))
+	}
+	for i := 1; i < len(ds); i++ {
+		if ds[i].At.Before(ds[i-1].At) {
+			t.Fatalf("downsample not oldest-first at %d", i)
+		}
+	}
+}
+
 func TestOpenSchemaIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "idem.db")
 

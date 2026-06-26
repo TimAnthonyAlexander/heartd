@@ -124,6 +124,44 @@ ORDER BY at ASC;`
 	return points, nil
 }
 
+// DiskIOWindow returns throughput aggregated across all devices, one point per
+// timestamp, for node within [from, to] (inclusive), downsampled to at most
+// maxPoints by time-bucket decimation: one representative timestamp (the
+// earliest) is kept per bucket and its devices summed. Ordered oldest-first.
+// Mirrors MetricsWindow so long ranges stay bounded.
+func (db *DB) DiskIOWindow(node string, from, to time.Time, maxPoints int) ([]DiskIOPoint, error) {
+	fromUnix := from.UTC().Unix()
+	toUnix := to.UTC().Unix()
+	bucket := bucketSize(fromUnix, toUnix, maxPoints)
+
+	const q = `
+SELECT
+    SUM(read_bytes_rate)  AS read_bytes_rate,
+    SUM(write_bytes_rate) AS write_bytes_rate,
+    SUM(read_ops_rate)    AS read_ops_rate,
+    SUM(write_ops_rate)   AS write_ops_rate,
+    at
+FROM disk_io_sample
+WHERE node = ? AND at >= ? AND at <= ? AND at IN (
+    SELECT MIN(at) FROM disk_io_sample
+    WHERE node = ? AND at >= ? AND at <= ?
+    GROUP BY (at - ?) / ?
+)
+GROUP BY at
+ORDER BY at ASC;`
+	rows, err := db.conn.Query(q, node, fromUnix, toUnix, node, fromUnix, toUnix, fromUnix, bucket)
+	if err != nil {
+		return nil, fmt.Errorf("storage: query disk io window for node %q: %w", node, err)
+	}
+	defer rows.Close()
+
+	points, err := scanDiskIOPoints(rows)
+	if err != nil {
+		return nil, fmt.Errorf("storage: scan disk io window for node %q: %w", node, err)
+	}
+	return points, nil
+}
+
 // PruneDiskIO deletes disk_io_sample rows with At < before. Returns rows deleted.
 func (db *DB) PruneDiskIO(before time.Time) (int64, error) {
 	const q = `DELETE FROM disk_io_sample WHERE at < ?;`

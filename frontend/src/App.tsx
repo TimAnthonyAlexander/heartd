@@ -17,6 +17,7 @@ import { RenameDialog } from './components/RenameDialog'
 import { nodeLabel } from './api'
 import { useCluster } from './hooks/useCluster'
 import { useNodeData } from './hooks/useNodeData'
+import { livePreset, RANGE_PRESETS, type TimeRange } from './timerange'
 import { useNodeAlerts } from './hooks/useNodeAlerts'
 import { useNodeAlertActivity } from './hooks/useNodeAlertActivity'
 import { colors, theme } from './theme'
@@ -57,7 +58,8 @@ export default function App({ username, onLogout }: AppProps) {
   const { name, tab: tabParam } = useParams()
   const selected = name ?? null
   const tab = asTab(tabParam)
-  const [rangeMinutes, setRangeMinutes] = useState(60)
+  // Default to the 1h live preset.
+  const [range, setRange] = useState<TimeRange>(() => livePreset(RANGE_PRESETS[1]))
   const [paused, setPaused] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -76,7 +78,7 @@ export default function App({ username, onLogout }: AppProps) {
   }
 
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
-  const data = useNodeData(selected, rangeMinutes, paused)
+  const data = useNodeData(selected, range, paused)
   const alerts = useNodeAlerts(selected, tab === 'dashboard')
   const alertActivity = useNodeAlertActivity(selected, tab === 'dashboard')
 
@@ -126,8 +128,8 @@ export default function App({ username, onLogout }: AppProps) {
           lastUpdated={data.lastUpdated}
           paused={paused}
           onTogglePause={() => setPaused((p) => !p)}
-          rangeMinutes={rangeMinutes}
-          onRangeChange={setRangeMinutes}
+          range={range}
+          onRangeChange={setRange}
           onMenu={isMobile ? () => setDrawerOpen(true) : undefined}
           username={username}
           onLogout={onLogout}

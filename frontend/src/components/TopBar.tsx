@@ -2,12 +2,8 @@ import { useEffect, useState } from 'react'
 import { Box, Chip, IconButton, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material'
 import type { NodeStatus } from '../api'
 import { colors, statusColor } from '../theme'
-
-export const RANGES = [
-  { label: '15m', minutes: 15 },
-  { label: '1h', minutes: 60 },
-  { label: '24h', minutes: 1440 },
-]
+import { livePreset, RANGE_PRESETS, type TimeRange } from '../timerange'
+import { CustomRangePopover } from './CustomRangePopover'
 
 interface Props {
   nodeName: string | null
@@ -15,14 +11,27 @@ interface Props {
   lastUpdated: number | null
   paused: boolean
   onTogglePause: () => void
-  rangeMinutes: number
-  onRangeChange: (minutes: number) => void
+  range: TimeRange
+  onRangeChange: (range: TimeRange) => void
   onMenu?: () => void
   username?: string | null
   onLogout?: () => void
   onSettings?: () => void
   // When set, shows a rename control next to the node title.
   onRename?: () => void
+}
+
+// customLabel renders a compact "Jun 20 14:00 – Jun 21 09:00" summary for the
+// custom toggle when a fixed range is active.
+function customLabel(range: TimeRange): string {
+  if (range.from == null || range.to == null) return 'Custom…'
+  const fmt = (ms: number) => {
+    const d = new Date(ms)
+    const day = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    return `${day} ${time}`
+  }
+  return `${fmt(range.from)} – ${fmt(range.to)}`
 }
 
 function useAgo(ts: number | null): string {
@@ -43,7 +52,7 @@ export function TopBar({
   lastUpdated,
   paused,
   onTogglePause,
-  rangeMinutes,
+  range,
   onRangeChange,
   onMenu,
   username,
@@ -53,6 +62,7 @@ export function TopBar({
 }: Props) {
   const ago = useAgo(lastUpdated)
   const fresh = lastUpdated != null && Date.now() - lastUpdated < 6000
+  const [customAnchor, setCustomAnchor] = useState<HTMLElement | null>(null)
 
   return (
     <Box
@@ -127,15 +137,33 @@ export function TopBar({
       <ToggleButtonGroup
         size="small"
         exclusive
-        value={rangeMinutes}
-        onChange={(_, v) => v != null && onRangeChange(v)}
+        value={range.key}
+        onChange={(e, v) => {
+          if (v == null) return
+          if (v === 'custom') {
+            setCustomAnchor(e.currentTarget as HTMLElement)
+            return
+          }
+          const p = RANGE_PRESETS.find((x) => x.key === v)
+          if (p) onRangeChange(livePreset(p))
+        }}
       >
-        {RANGES.map((r) => (
-          <ToggleButton key={r.minutes} value={r.minutes} sx={{ px: 1.5, py: 0.25, fontSize: 12 }}>
-            {r.label}
+        {RANGE_PRESETS.map((p) => (
+          <ToggleButton key={p.key} value={p.key} sx={{ px: 1.5, py: 0.25, fontSize: 12 }}>
+            {p.label}
           </ToggleButton>
         ))}
+        <ToggleButton value="custom" sx={{ px: 1.5, py: 0.25, fontSize: 12, textTransform: 'none' }}>
+          {range.key === 'custom' ? customLabel(range) : 'Custom…'}
+        </ToggleButton>
       </ToggleButtonGroup>
+
+      <CustomRangePopover
+        anchorEl={customAnchor}
+        current={range}
+        onClose={() => setCustomAnchor(null)}
+        onApply={onRangeChange}
+      />
 
       {onSettings && (
         <Tooltip title="Settings">

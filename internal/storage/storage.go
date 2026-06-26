@@ -330,6 +330,57 @@ ORDER BY at ASC, id ASC;`
 	return samples, nil
 }
 
+// bucketSize returns the width, in seconds, of each downsample bucket so that a
+// [fromUnix, toUnix] window splits into about maxPoints equal buckets. The result
+// is always >= 1 so integer bucketing never divides by zero.
+func bucketSize(fromUnix, toUnix int64, maxPoints int) int64 {
+	if maxPoints < 1 {
+		maxPoints = 1
+	}
+	span := toUnix - fromUnix
+	if span < 1 {
+		return 1
+	}
+	if b := span / int64(maxPoints); b > 1 {
+		return b
+	}
+	return 1
+}
+
+// MetricsWindow returns samples for node within [from, to] (inclusive),
+// downsampled to about maxPoints by time-bucket decimation: the window is split
+// into maxPoints equal time buckets and the earliest sample in each bucket is
+// kept (so at most maxPoints+1 rows — the inclusive top edge can fall in its own
+// bucket). Results are ordered oldest-first. This bounds the row count for long
+// (multi-day) ranges so the dashboard never has to render tens of thousands of
+// points.
+func (db *DB) MetricsWindow(node string, from, to time.Time, maxPoints int) ([]MetricSample, error) {
+	fromUnix := from.UTC().Unix()
+	toUnix := to.UTC().Unix()
+	bucket := bucketSize(fromUnix, toUnix, maxPoints)
+
+	const q = `
+SELECT node, cpu_percent, mem_used, mem_total, mem_percent, load1, load5, load15, swap_used, swap_total, swap_percent, at
+FROM metric_sample
+WHERE node = ? AND at >= ? AND at <= ? AND id IN (
+    SELECT MIN(id) FROM metric_sample
+    WHERE node = ? AND at >= ? AND at <= ?
+    GROUP BY (at - ?) / ?
+)
+ORDER BY at ASC, id ASC;`
+	rows, err := db.conn.Query(q, node, fromUnix, toUnix, node, fromUnix, toUnix, fromUnix, bucket)
+	if err != nil {
+		return nil, fmt.Errorf("storage: query metrics window for node %q: %w", node, err)
+	}
+	defer rows.Close()
+
+	samples, err := scanSamples(rows)
+	if err != nil {
+		return nil, fmt.Errorf("storage: scan metrics window for node %q: %w", node, err)
+	}
+	return samples, nil
+}
+
 // LatestMetric returns the single most recent sample for node, or
 // (zero, false, nil) if none exists.
 func (db *DB) LatestMetric(node string) (MetricSample, bool, error) {
