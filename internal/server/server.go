@@ -72,6 +72,7 @@ func New(cfg Config) http.Handler {
 	// is the only API surface in headless mode).
 	mux.Handle("POST /api/peer/announce", s.requireSecret(http.HandlerFunc(s.handlePeerAnnounce)))
 	mux.Handle("GET /api/peer/members", s.requireSecret(http.HandlerFunc(s.handlePeerMembers)))
+	mux.Handle("GET /api/peer/whoami", s.requireSecret(http.HandlerFunc(s.handlePeerWhoami)))
 	mux.Handle("GET /api/peer/metrics", s.requireSecret(http.HandlerFunc(s.handlePeerMetrics)))
 	mux.Handle("GET /api/peer/checks", s.requireSecret(http.HandlerFunc(s.handlePeerChecks)))
 	mux.Handle("GET /api/peer/disk", s.requireSecret(http.HandlerFunc(s.handlePeerDisk)))
@@ -1030,6 +1031,14 @@ func (s *server) handlePeerAnnounce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"name": s.cfg.NodeName})
+}
+
+// handlePeerWhoami returns this node's canonical name. It is the authoritative
+// answer to "which node is reachable at this URL?", letting a peer identify a
+// gossiped URL — including one that loops back to the asking node itself — without
+// relying on names (which default to hostnames) or a possibly-wrong advertise_url.
+func (s *server) handlePeerWhoami(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, cluster.WhoAmI{Name: s.cfg.NodeName})
 }
 
 // handlePeerMembers serves this node's view of cluster membership: itself (when

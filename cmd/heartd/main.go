@@ -112,6 +112,9 @@ func run(configPath, addrOverride string, headlessFlag bool) error {
 	// storage and is managed live from the dashboard, so the poller always runs
 	// even when no peers are configured yet.
 	poller := cluster.New(db, cfg.Server.Name, cfg.Server.AdvertiseURL, cfg.Server.PeerSecret, set)
+	// When self-healing removes a phantom peer that was really this node, drop its
+	// lingering alert state too.
+	poller.SetOnPeerRemoved(engine.ForgetNode)
 	go poller.Run(ctx)
 
 	// Start the alert rule evaluator: reads rules + current data each tick and

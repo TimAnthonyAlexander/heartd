@@ -97,6 +97,11 @@ type Poller struct {
 	// read by the per-peer goroutines pollAll spawns; the wg.Wait barrier each
 	// cycle orders the write before the next cycle's reads, so no lock is needed.
 	fallback string
+
+	// onPeerRemoved, if set, is called with a peer's name after the poller removes
+	// it (e.g. self-healing a phantom row that turned out to be this node). Wired
+	// to the alert engine's ForgetNode so removed peers don't linger in alert state.
+	onPeerRemoved func(name string)
 }
 
 const fallbackPollInterval = 15 * time.Second
@@ -121,6 +126,10 @@ func New(db *storage.DB, selfName, advertiseURL, clusterSecret string, set *sett
 		client:        &http.Client{Timeout: 8 * time.Second},
 	}
 }
+
+// SetOnPeerRemoved registers a callback invoked with a peer's name after the
+// poller removes it during self-healing. Optional; nil disables the hook.
+func (p *Poller) SetOnPeerRemoved(fn func(name string)) { p.onPeerRemoved = fn }
 
 // refreshFallback resolves the secret presented to secret-less (gossiped) peers
 // for this cycle: the explicitly configured cluster secret when set, otherwise

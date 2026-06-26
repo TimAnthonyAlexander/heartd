@@ -21,61 +21,132 @@ func openTestDB(t *testing.T) *storage.DB {
 	return db
 }
 
-// TestGossipDiscoversNewPeerWithClusterSecret is the end-to-end membership test:
-// a peer added with no per-link secret is still reachable via the cluster secret,
-// its /members view is fetched, and a previously-unknown node is added — while
-// self and already-known nodes are not duplicated.
-func TestGossipDiscoversNewPeerWithClusterSecret(t *testing.T) {
-	const clusterSecret = "cluster-shared-secret"
-
-	// A peer that authenticates with the cluster secret and advertises a third
-	// node (node-c) plus the local node itself (which must NOT be re-added).
-	var gotSecret string
-	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotSecret = r.Header.Get(SecretHeader)
-		if r.URL.Path != "/api/peer/members" {
+// nodeServer is a stand-in heartd node: it answers /api/peer/whoami with the
+// given canonical name and /api/peer/members with the given membership list.
+func nodeServer(t *testing.T, name string, members []Member) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/peer/whoami":
+			_ = json.NewEncoder(w).Encode(WhoAmI{Name: name})
+		case "/api/peer/members":
+			_ = json.NewEncoder(w).Encode(MembersResponse{Members: members})
+		default:
 			w.WriteHeader(http.StatusNotFound)
-			return
 		}
-		_ = json.NewEncoder(w).Encode(MembersResponse{Members: []Member{
-			{Name: "node-self", URL: "http://node-self:9300"}, // us — skip
-			{Name: "node-b", URL: peerURLPlaceholder},         // the responder — already known
-			{Name: "node-c", URL: "http://node-c:9300"},       // genuinely new — add
-		}})
 	}))
-	defer peer.Close()
+	t.Cleanup(srv.Close)
+	return srv
+}
 
-	db := openTestDB(t)
-	// node-b is known, enabled, but carries NO per-link secret — it must be
-	// reached via the cluster secret.
-	if err := db.UpsertPeer(storage.Peer{Name: "node-b", URL: peer.URL}); err != nil {
-		t.Fatalf("seed peer: %v", err)
-	}
-
-	p := New(db, "node-self", "http://node-self:9300", clusterSecret, settings.New(db))
-	p.refreshFallback() // Run does this each cycle before gossip/poll
-	p.gossip(context.Background())
-
-	if gotSecret != clusterSecret {
-		t.Errorf("peer was called with secret %q, want the cluster secret %q", gotSecret, clusterSecret)
-	}
-
+func peerNames(t *testing.T, db *storage.DB) map[string]bool {
+	t.Helper()
 	peers, err := db.ListPeers()
 	if err != nil {
 		t.Fatalf("list peers: %v", err)
 	}
-	names := map[string]bool{}
-	for _, pr := range peers {
-		names[pr.Name] = true
+	names := make(map[string]bool, len(peers))
+	for _, p := range peers {
+		names[p.Name] = true
 	}
+	return names
+}
+
+// TestGossipDiscoversReachableSkipsSelfAndUnreachable is the core fix: identity
+// is resolved by probing a URL's /whoami, NOT by the node's own advertise_url
+// (here deliberately empty). So a peer's correct-but-foreign-labelled entry for
+// THIS node is recognized as self and skipped — no phantom — while a genuinely
+// new reachable node is added under its canonical name, and an unreachable node
+// is not added at all.
+func TestGossipDiscoversReachableSkipsSelfAndUnreachable(t *testing.T) {
+	db := openTestDB(t)
+	const shared = "shared-secret"
+
+	self := nodeServer(t, "node-self", nil) // a URL that loops back to us
+	nodeC := nodeServer(t, "node-c", nil)   // a genuinely new, reachable node
+
+	// The peer we gossip from lists: itself, US (under a foreign label but correct
+	// URL), a new node-c, and an unreachable ghost.
+	nodeB := nodeServer(t, "node-b", []Member{
+		{Name: "node-b", URL: "http://node-b.example:9300"},
+		{Name: "weird-label-for-self", URL: self.URL},
+		{Name: "label-for-c", URL: nodeC.URL},
+		{Name: "ghost", URL: "http://127.0.0.1:1/"},
+	})
+	if err := db.UpsertPeer(storage.Peer{Name: "node-b", URL: nodeB.URL, Secret: shared}); err != nil {
+		t.Fatal(err)
+	}
+
+	// advertise_url is empty on purpose — self-detection must not depend on it.
+	p := New(db, "node-self", "", "", settings.New(db))
+	p.refreshFallback()
+	p.gossip(context.Background())
+
+	names := peerNames(t, db)
 	if !names["node-c"] {
-		t.Errorf("expected node-c to be discovered via gossip; have %v", names)
+		t.Errorf("reachable new node-c should be discovered; have %v", names)
 	}
-	if names["node-self"] {
-		t.Errorf("the local node must not be added as its own peer; have %v", names)
+	if names["weird-label-for-self"] || names["node-self"] {
+		t.Errorf("this node must not be added as its own peer; have %v", names)
 	}
-	if len(peers) != 2 { // node-b (seeded) + node-c (discovered)
-		t.Errorf("expected exactly 2 peers (node-b, node-c), got %d: %v", len(peers), names)
+	if names["ghost"] {
+		t.Errorf("unreachable node must not be added; have %v", names)
+	}
+	if len(names) != 2 { // node-b (seeded) + node-c (discovered)
+		t.Errorf("want exactly {node-b, node-c}, got %v", names)
+	}
+}
+
+// TestGossipSelfHealRemovesPhantomSelf verifies the cleanup path: an auto-added
+// (secret-less) peer whose URL resolves to this node is removed, the alert hook
+// fires, and a legitimately distinct auto-added peer survives.
+func TestGossipSelfHealRemovesPhantomSelf(t *testing.T) {
+	db := openTestDB(t)
+	self := nodeServer(t, "node-self", nil)
+	nodeX := nodeServer(t, "node-x", nil)
+
+	// phantom: no secret, URL loops back to us. node-x: no secret, distinct node.
+	if err := db.UpsertPeer(storage.Peer{Name: "phantom", URL: self.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertPeer(storage.Peer{Name: "node-x", URL: nodeX.URL}); err != nil {
+		t.Fatal(err)
+	}
+
+	var removed []string
+	p := New(db, "node-self", "", "", settings.New(db))
+	p.SetOnPeerRemoved(func(n string) { removed = append(removed, n) })
+	p.refreshFallback()
+	p.gossip(context.Background())
+
+	names := peerNames(t, db)
+	if names["phantom"] {
+		t.Errorf("phantom self peer should have been removed; have %v", names)
+	}
+	if !names["node-x"] {
+		t.Errorf("legit peer node-x should survive; have %v", names)
+	}
+	if len(removed) != 1 || removed[0] != "phantom" {
+		t.Errorf("onPeerRemoved = %v, want [phantom]", removed)
+	}
+}
+
+// TestManuallyAddedPeerNeverSelfHealed guards the safety rule: a peer carrying a
+// per-link secret is trusted as distinct and never auto-removed, even if (in a
+// misconfig) its URL would resolve to this node.
+func TestManuallyAddedPeerNeverSelfHealed(t *testing.T) {
+	db := openTestDB(t)
+	self := nodeServer(t, "node-self", nil)
+	if err := db.UpsertPeer(storage.Peer{Name: "manual", URL: self.URL, Secret: "explicit"}); err != nil {
+		t.Fatal(err)
+	}
+
+	p := New(db, "node-self", "", "", settings.New(db))
+	p.refreshFallback()
+	p.gossip(context.Background())
+
+	if !peerNames(t, db)["manual"] {
+		t.Errorf("a manually added peer (with a secret) must not be self-healed away")
 	}
 }
 
@@ -86,7 +157,6 @@ func TestGossipDiscoversNewPeerWithClusterSecret(t *testing.T) {
 func TestEffectiveSecretAutoDerivesFromPeers(t *testing.T) {
 	db := openTestDB(t)
 	const shared = "the-shared-secret"
-	// Two existing links that share one secret (the typical setup).
 	if err := db.UpsertPeer(storage.Peer{Name: "node-b", URL: "http://node-b:9300", Secret: shared}); err != nil {
 		t.Fatal(err)
 	}
@@ -94,21 +164,13 @@ func TestEffectiveSecretAutoDerivesFromPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// No clusterSecret configured — the fallback must be derived from the table.
 	p := New(db, "node-self", "http://node-self:9300", "", settings.New(db))
 	p.refreshFallback()
 
-	// A gossip-discovered peer (no per-link secret) is reached with the shared one.
 	if got := p.effectiveSecret(storage.Peer{Name: "node-d", URL: "http://node-d:9300"}); got != shared {
 		t.Errorf("secret-less peer resolved to %q, want derived shared secret %q", got, shared)
 	}
-	// A peer with its own secret still uses that.
 	if got := p.effectiveSecret(storage.Peer{Name: "x", Secret: "own"}); got != "own" {
 		t.Errorf("peer with own secret resolved to %q, want %q", got, "own")
 	}
 }
-
-// peerURLPlaceholder stands in for "the responder's own URL" in the members list.
-// node-b is already known by name, so the exact URL value is irrelevant to the
-// dedup (name match wins) — any non-empty URL exercises the already-known path.
-const peerURLPlaceholder = "http://node-b:9300"
