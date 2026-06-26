@@ -296,20 +296,28 @@ curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/ins
   | sudo bash -s -- --headless --secret <SHARED_SECRET>
 ```
 
-This installs a systemd service bound to `0.0.0.0:9300`, writes a headless config
-(`headless: true` + `peer_secret`), skips the nginx/firewall steps, and **prints
-exactly what to add on your HQ**. Then on the HQ dashboard click **+ Add node**
-with `http://<agent-ip>:9300` and the same secret — and configure its checks and
-alerts remotely (those edits proxy to the agent). Omit `--secret` and the
-installer generates one and prints it; reuse that one secret across the fleet.
+This installs a systemd service, writes a headless config (`headless: true` +
+`peer_secret`), and **prints exactly what to add on your HQ**. Then on the HQ
+dashboard click **+ Add node** with the agent's URL and the same secret — and
+configure its checks and alerts remotely (those edits proxy to the agent). Omit
+`--secret` and the installer generates one and prints it; reuse that one secret
+across the fleet.
 
-- **Topology:** the **HQ polls the agents**, so the HQ works even behind NAT (e.g.
-  your laptop), while agents just need a reachable IP. You can also flip any node
-  headless by hand with `headless: true` + `peer_secret` in its `heartd.yaml`.
-- **Security:** the peer API is plain HTTP, so over the public internet the shared
-  secret and metrics travel **unencrypted**. Prefer a private network or a mesh
-  VPN (Tailscale/WireGuard) between HQ and agents; otherwise you're trading wire
-  security for skipping certs. Make sure the agent's port is reachable from the HQ.
+The installer **asks how to expose it** (or pass `--bind`):
+
+- **Direct / plain HTTP** (`--bind 0.0.0.0`, the piped default): reachable at
+  `http://<agent-ip>:9300`. Simplest, no certs — but the secret and metrics travel
+  **unencrypted**, so use it on a private network or a mesh VPN (Tailscale).
+- **Behind your own TLS** (`--bind 127.0.0.1`): binds localhost; you front it with
+  nginx or Caddy and a cert, and add it on the HQ as `https://<agent-domain>`. The
+  installer prints a ready Caddy block. Encrypted transport, still no dashboard —
+  heartd already polls `https://` peers (your `lairner` node works this way).
+
+**Topology:** the **HQ polls the agents**, so the HQ works even behind NAT (e.g.
+your laptop), while agents just need a reachable address. heartd's poller verifies
+TLS, so HTTPS agents need a publicly-trusted cert (Let's Encrypt/Caddy), not
+self-signed. You can also flip any node headless by hand with `headless: true` +
+`peer_secret` in its `heartd.yaml`.
 
 heartd serves plain HTTP on localhost; terminate TLS at your reverse proxy. If you
 prefer to wire systemd by hand, a unit template also lives at

@@ -43,6 +43,9 @@
 #                     peer API, and prints how to add it on your HQ node.
 #   --secret SECRET   Shared secret for the peer link (headless mode). If omitted
 #                     in --headless, one is generated and printed.
+#   --bind HOST       Bind address override: 0.0.0.0 (reachable directly, plain
+#                     HTTP) or 127.0.0.1 (local; you front it with your own TLS).
+#                     Headless installs ask if this is not given.
 #   -h, --help        Show this help and exit.
 #
 # Headless agent one-liner (public box you just want HQ to watch):
@@ -63,6 +66,7 @@ ASSUME_YES="no"
 ALLOW_UFW="no"
 HEADLESS="no"
 SECRET=""
+BIND_HOST_OVERRIDE="" # 127.0.0.1 or 0.0.0.0; empty = ask (headless) / default
 DOWNLOADED="" # temp file to clean up if we downloaded the binary
 
 PREFIX_BIN="/usr/local/bin/heartd"
@@ -138,6 +142,10 @@ while [ $# -gt 0 ]; do
     ;;
   --secret)
     SECRET="${2:-}"
+    shift 2
+    ;;
+  --bind)
+    BIND_HOST_OVERRIDE="${2:-}"
     shift 2
     ;;
   --ufw)
@@ -255,13 +263,29 @@ if [ "$HEADLESS" = "yes" ] && [ -z "$SECRET" ]; then
   SECRET_GENERATED="yes"
 fi
 
-# Bind address: headless agents must be reachable by the HQ, so bind all
-# interfaces; dashboard nodes bind localhost and sit behind a reverse proxy.
-if [ "$HEADLESS" = "yes" ]; then
-  BIND="0.0.0.0:${PORT}"
+# Bind address. Dashboard nodes always bind localhost (behind a reverse proxy).
+# Headless agents choose: expose directly over plain HTTP (0.0.0.0), or bind
+# localhost and front it yourself with nginx/TLS. --bind overrides; otherwise we
+# ask interactively and default to direct/HTTP when piped (non-interactive).
+if [ -n "$BIND_HOST_OVERRIDE" ]; then
+  BIND_HOST="$BIND_HOST_OVERRIDE"
+elif [ "$HEADLESS" = "yes" ]; then
+  if [ -t 0 ] && [ "$ASSUME_YES" != "yes" ]; then
+    c_blue "How should this agent be reached by your HQ?"
+    info "  • direct  — bind 0.0.0.0, plain HTTP on IP:${PORT} (simplest, no certs)"
+    info "  • behind  — bind 127.0.0.1, you front it with your own nginx/Caddy + TLS (https)"
+    if confirm "Expose directly over plain HTTP? (No = bind 127.0.0.1 for your own TLS)"; then
+      BIND_HOST="0.0.0.0"
+    else
+      BIND_HOST="127.0.0.1"
+    fi
+  else
+    BIND_HOST="0.0.0.0" # non-interactive headless default: direct/HTTP (pass --bind to change)
+  fi
 else
-  BIND="127.0.0.1:${PORT}"
+  BIND_HOST="127.0.0.1"
 fi
+BIND="${BIND_HOST}:${PORT}"
 
 c_blue "heartd installer"
 info "binary:    $BINARY"
@@ -269,7 +293,11 @@ info "arch:      $ARCH"
 info "node name: $NODE_NAME"
 if [ "$HEADLESS" = "yes" ]; then
   info "mode:      headless agent (no dashboard; managed from your HQ)"
-  info "bind:      ${BIND}  (reachable by your HQ)"
+  if [ "$BIND_HOST" = "127.0.0.1" ]; then
+    info "bind:      ${BIND}  (localhost — front it with your own nginx/TLS)"
+  else
+    info "bind:      ${BIND}  (reachable directly by your HQ over HTTP)"
+  fi
 else
   info "mode:      dashboard (behind your reverse proxy)"
   info "bind:      ${BIND}  (localhost only)"
@@ -436,10 +464,35 @@ fi
 
 # ----- Headless agent: print how to add it on the HQ, then finish -----
 if [ "$HEADLESS" = "yes" ]; then
-  AGENT_IP="$(detect_ip)"
   echo
   c_blue "Headless agent ready — add it on your HQ"
-  cat <<TXT
+
+  if [ "$BIND_HOST" = "127.0.0.1" ]; then
+    # Behind-your-own-TLS path: bound to localhost, user fronts it with a proxy.
+    cat <<TXT
+
+This node is bound to 127.0.0.1:${PORT} and has no dashboard. Front it with your
+own reverse proxy + TLS, then add it on your HQ with the HTTPS URL.
+
+Caddy (auto-HTTPS) — /etc/caddy/Caddyfile:
+
+  agent.example.com {
+      reverse_proxy 127.0.0.1:${PORT}
+  }
+
+…or nginx: proxy_pass http://127.0.0.1:${PORT};  then  certbot --nginx -d agent.example.com
+
+On your HQ's dashboard, click "+ Add node":
+
+    name:    ${NODE_NAME}
+    URL:     https://agent.example.com
+    secret:  ${SECRET}
+
+TXT
+  else
+    # Direct/plain-HTTP path: reachable on IP:port.
+    AGENT_IP="$(detect_ip)"
+    cat <<TXT
 
 This node has no dashboard. On your HQ node's dashboard, click "+ Add node":
 
@@ -447,19 +500,28 @@ This node has no dashboard. On your HQ node's dashboard, click "+ Add node":
     URL:     http://${AGENT_IP}:${PORT}
     secret:  ${SECRET}
 
+TXT
+  fi
+
+  cat <<TXT
 Then configure its checks, alerts, and notifications from the HQ — those edits
 proxy to this node over the peer link.
 
 TXT
+
   if [ "${SECRET_GENERATED:-no}" = "yes" ]; then
     c_yellow "A shared secret was generated. Use the SAME secret on every agent and"
     c_yellow "when adding them on the HQ. It won't be shown again:"
     info "  ${SECRET}"
     echo
   fi
-  c_yellow "Heads up: the peer API is plain HTTP. On a public network the secret and"
-  info "metrics travel unencrypted — prefer a private network / VPN, or accept the risk."
-  info "Make sure port ${PORT} is reachable from your HQ (open it in your cloud SG / firewall)."
+  if [ "$BIND_HOST" = "127.0.0.1" ]; then
+    info "Your reverse proxy gives you TLS, so the peer link is encrypted."
+  else
+    c_yellow "Heads up: the peer API is plain HTTP. On a public network the secret and"
+    info "metrics travel unencrypted — prefer a private network / VPN, or use --bind 127.0.0.1"
+    info "with your own TLS proxy. Make sure port ${PORT} is reachable from your HQ."
+  fi
   echo
   c_green "Done."
   info "Logs:   journalctl -u heartd -f"
