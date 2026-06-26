@@ -36,20 +36,28 @@ resources, service checks, and the reachability of every node in a small cluster
 
 ## Quick start
 
-Download the binary for your platform (or build it — see [Building](#building)),
-drop a config next to it, and run:
+**Try it now** (Linux or macOS) — fetch the binary for your platform and run it.
+No config, no clone, no build:
 
 ```sh
-cp heartd.example.yaml heartd.yaml   # then edit
-./heartd                             # serves on http://localhost:9300
+curl -fsSL "https://github.com/timanthonyalexander/heartd/releases/latest/download/heartd-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" -o heartd
+chmod +x heartd
+./heartd
 ```
 
-Open <http://localhost:9300> and create the first admin account. With no
-`heartd.yaml` present, heartd runs with sensible defaults (local node only, 30s
-sampling, the default alert rules, no checks/peers).
+Then open <http://localhost:9300> and create the first admin account. With no
+`heartd.yaml`, heartd runs with sensible defaults (local node only, 30s sampling,
+the default alert rules, no checks/peers) — everything else is configured in the
+dashboard.
 
-For a production Linux box, use [`install.sh`](#deployment-linux) to set up a
-hardened systemd service in one command.
+**Install as a service** (Linux) — one command, sets up a hardened systemd unit:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/install.sh | sudo bash
+```
+
+See [Deployment](#deployment-linux) for what that does, TLS/reverse-proxy notes,
+and upgrades. Building from source instead? See [Building](#building).
 
 Flags:
 
