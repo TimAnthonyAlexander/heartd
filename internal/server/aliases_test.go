@@ -1,11 +1,13 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/timanthonyalexander/heartd/internal/cluster"
 	"github.com/timanthonyalexander/heartd/internal/settings"
 	"github.com/timanthonyalexander/heartd/internal/storage"
 )
@@ -33,19 +35,45 @@ func TestSetAliasLocalNode(t *testing.T) {
 	}
 }
 
+// Renaming a PEER pushes the name to the peer itself (authoritative, so it
+// propagates cluster-wide) and mirrors it locally for instant feedback.
 func TestSetAliasPeerNode(t *testing.T) {
 	db := testDB(t)
 	s := localServer("web-01", db, settings.New(db))
-	if err := db.UpsertPeer(storage.Peer{Name: "db-01", URL: "http://db-01:9300", Secret: "s"}); err != nil {
+
+	var gotSecret, gotAlias, gotPath, gotMethod string
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		gotSecret = r.Header.Get(cluster.SecretHeader)
+		var in aliasInput
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		gotAlias = in.Alias
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"alias":"Primary DB"}`))
+	}))
+	defer peer.Close()
+
+	if err := db.UpsertPeer(storage.Peer{Name: "db-01", URL: peer.URL, Secret: "s"}); err != nil {
 		t.Fatal(err)
 	}
 
 	if rec := setAlias(t, s, "db-01", `{"alias":"Primary DB"}`); rec.Code != http.StatusOK {
 		t.Fatalf("set peer alias = %d, body %s", rec.Code, rec.Body.String())
 	}
+	// The rename reached the peer over the secret link.
+	if gotMethod != http.MethodPut || gotPath != "/api/peer/settings/alias" {
+		t.Errorf("peer received %s %s, want PUT /api/peer/settings/alias", gotMethod, gotPath)
+	}
+	if gotSecret != "s" {
+		t.Errorf("peer secret = %q, want %q", gotSecret, "s")
+	}
+	if gotAlias != "Primary DB" {
+		t.Errorf("peer alias = %q, want %q", gotAlias, "Primary DB")
+	}
+	// And it was mirrored locally for instant feedback.
 	aliases, _ := db.NodeAliases()
 	if got := aliases["db-01"]; got != "Primary DB" {
-		t.Fatalf("alias = %q, want %q", got, "Primary DB")
+		t.Fatalf("local mirror = %q, want %q", got, "Primary DB")
 	}
 }
 

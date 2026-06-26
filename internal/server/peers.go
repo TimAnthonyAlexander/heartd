@@ -174,21 +174,15 @@ type aliasInput struct {
 	Alias string `json:"alias"`
 }
 
-// handleSetNodeAlias sets or clears a node's display alias. The node's real name
-// remains the identity key everywhere (storage, routing, peer protocol); the
-// alias only changes how this dashboard labels it. Works for the local node and
-// for any known peer. A blank alias (or one equal to the real name) clears it.
+// handleSetNodeAlias sets or clears a node's display name. A node owns its own
+// name: renaming the LOCAL node writes its own row; renaming a PEER pushes the
+// name to that peer over the shared-secret link, so it becomes authoritative
+// there and propagates to every dashboard via identity polling. This is what
+// makes a rename made anywhere converge to the same label cluster-wide. The real
+// name stays the identity key everywhere; a blank name (or one equal to the real
+// name) clears it.
 func (s *server) handleSetNodeAlias(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if name != s.cfg.NodeName {
-		if _, ok, err := s.cfg.DB.GetPeer(name); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		} else if !ok {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown node"})
-			return
-		}
-	}
 
 	var in aliasInput
 	if !decodeBody(w, r, &in) {
@@ -199,20 +193,75 @@ func (s *server) handleSetNodeAlias(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "display name must be 64 characters or fewer"})
 		return
 	}
+	if alias == name {
+		alias = "" // a label equal to the real name is no label
+	}
 
-	if alias == "" || alias == name {
-		if err := s.cfg.DB.DeleteNodeAlias(name); err != nil {
+	if name == s.cfg.NodeName {
+		if err := s.applySelfAlias(alias); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"alias": ""})
+		writeJSON(w, http.StatusOK, map[string]string{"alias": alias})
 		return
 	}
-	if err := s.cfg.DB.SetNodeAlias(name, alias); err != nil {
+
+	peer, ok, err := s.peerByName(name)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown node"})
+		return
+	}
+	if msg := s.pushAliasToPeer(peer, alias); msg != "" {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": msg})
+		return
+	}
+	// Mirror locally for instant feedback; the next poll re-confirms the same
+	// value the peer now advertises, and every other dashboard converges too.
+	if err := s.writeNodeAlias(name, alias); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"alias": alias})
+}
+
+// handlePeerSetAlias is the peer-side endpoint: a remote dashboard renaming THIS
+// node. It writes this node's own display name, which is then advertised to the
+// cluster via /api/peer/identity. Secret-protected.
+func (s *server) handlePeerSetAlias(w http.ResponseWriter, r *http.Request) {
+	var in aliasInput
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	alias := strings.TrimSpace(in.Alias)
+	if len([]rune(alias)) > 64 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "display name must be 64 characters or fewer"})
+		return
+	}
+	if alias == s.cfg.NodeName {
+		alias = ""
+	}
+	if err := s.applySelfAlias(alias); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"alias": alias})
+}
+
+// applySelfAlias sets or clears this node's own display name.
+func (s *server) applySelfAlias(alias string) error {
+	return s.writeNodeAlias(s.cfg.NodeName, alias)
+}
+
+// writeNodeAlias sets a node's display name, or clears it when alias is blank.
+func (s *server) writeNodeAlias(node, alias string) error {
+	if alias == "" {
+		return s.cfg.DB.DeleteNodeAlias(node)
+	}
+	return s.cfg.DB.SetNodeAlias(node, alias)
 }
 
 // validatePeer returns an error message, or "" when the input is valid.

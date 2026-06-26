@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -90,6 +91,7 @@ func New(cfg Config) http.Handler {
 	mux.Handle("GET /api/peer/settings", s.requireSecret(http.HandlerFunc(s.handleGetSettings)))
 	mux.Handle("PUT /api/peer/settings/general", s.requireSecret(http.HandlerFunc(s.handlePutGeneral)))
 	mux.Handle("PUT /api/peer/settings/notify", s.requireSecret(http.HandlerFunc(s.handlePutNotify)))
+	mux.Handle("PUT /api/peer/settings/alias", s.requireSecret(http.HandlerFunc(s.handlePeerSetAlias)))
 	mux.Handle("POST /api/peer/settings/notify/test", s.requireSecret(http.HandlerFunc(s.handleTestNotify)))
 	mux.Handle("POST /api/peer/settings/checks", s.requireSecret(http.HandlerFunc(s.handleCreateCheck)))
 	mux.Handle("PUT /api/peer/settings/checks/{id}", s.requireSecret(http.HandlerFunc(s.handleUpdateCheck)))
@@ -258,6 +260,34 @@ func (s *server) peerByName(name string) (storage.Peer, bool, error) {
 		}
 	}
 	return storage.Peer{}, false, nil
+}
+
+// pushAliasToPeer writes a node's display name on the node itself, over the
+// shared-secret link, so the rename is authoritative and propagates to the whole
+// cluster from its owner. Returns an error string suitable for the API response,
+// or "" on success.
+func (s *server) pushAliasToPeer(peer storage.Peer, alias string) string {
+	if peer.URL == "" || peer.Secret == "" {
+		return "peer is not configured for remote edits (missing url or shared secret)"
+	}
+	body, _ := json.Marshal(aliasInput{Alias: alias})
+	ctx, cancel := context.WithTimeout(context.Background(), 14*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, peer.URL+"/api/peer/settings/alias", bytes.NewReader(body))
+	if err != nil {
+		return err.Error()
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(cluster.SecretHeader, peer.Secret)
+	resp, err := s.proxyClient.Do(req)
+	if err != nil {
+		return "peer unreachable: " + err.Error()
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Sprintf("peer rejected rename (status %d)", resp.StatusCode)
+	}
+	return ""
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {

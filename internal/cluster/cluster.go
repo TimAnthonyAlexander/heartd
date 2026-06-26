@@ -361,24 +361,25 @@ func (p *Poller) storePeerDiskIO(ctx context.Context, peer storage.Peer) {
 	}
 }
 
-// storePeerIdentity fetches a peer's self-advertised display name and records it
-// as that peer's advertised alias, so a name set once on a node propagates to
-// this dashboard. A blank name, or one equal to the peer's real name, clears the
-// advertised alias (the peer advertises no distinct label). Best-effort: a
-// failure here leaves any existing alias untouched and does not affect the poll.
+// storePeerIdentity fetches a peer's self-advertised display name and caches it
+// as that peer's name, so a name set once on a node converges to the same label
+// on every dashboard. A blank name, or one equal to the peer's real name, clears
+// the cached name (the peer advertises no distinct label). This overwrites every
+// poll, so it also self-heals any stale local label. Best-effort: a failure here
+// does not affect the rest of the poll.
 func (p *Poller) storePeerIdentity(ctx context.Context, peer storage.Peer) {
 	var id Identity
 	if err := p.getJSON(ctx, peer, "/api/peer/identity", &id); err != nil {
 		return
 	}
 	if id.DisplayName != "" && id.DisplayName != peer.Name {
-		if err := p.db.SetAdvertisedAlias(peer.Name, id.DisplayName); err != nil {
-			log.Printf("cluster: store peer %q advertised alias failed: %v", peer.Name, err)
+		if err := p.db.SetNodeAlias(peer.Name, id.DisplayName); err != nil {
+			log.Printf("cluster: cache peer %q display name failed: %v", peer.Name, err)
 		}
 		return
 	}
-	if err := p.db.SetAdvertisedAlias(peer.Name, ""); err != nil {
-		log.Printf("cluster: clear peer %q advertised alias failed: %v", peer.Name, err)
+	if err := p.db.DeleteNodeAlias(peer.Name); err != nil {
+		log.Printf("cluster: clear peer %q display name failed: %v", peer.Name, err)
 	}
 }
 
