@@ -34,6 +34,48 @@ ON CONFLICT(name) DO UPDATE SET
 	return nil
 }
 
+// GetPeer returns the named peer, or ok=false if no such peer exists.
+func (db *DB) GetPeer(name string) (Peer, bool, error) {
+	const q = `
+SELECT name, url, secret, status, last_seen, last_error
+FROM peer
+WHERE name = ?;`
+	rows, err := db.conn.Query(q, name)
+	if err != nil {
+		return Peer{}, false, fmt.Errorf("storage: query peer %q: %w", name, err)
+	}
+	defer rows.Close()
+
+	peers, err := scanPeers(rows)
+	if err != nil {
+		return Peer{}, false, fmt.Errorf("storage: scan peer %q: %w", name, err)
+	}
+	if len(peers) == 0 {
+		return Peer{}, false, nil
+	}
+	return peers[0], true, nil
+}
+
+// DeletePeer removes a peer row by name. It does NOT touch the metric/check/disk/
+// net data stored under that node's name — see DeleteNodeData for that.
+func (db *DB) DeletePeer(name string) error {
+	if _, err := db.conn.Exec(`DELETE FROM peer WHERE name = ?;`, name); err != nil {
+		return fmt.Errorf("storage: delete peer %q: %w", name, err)
+	}
+	return nil
+}
+
+// DeleteNodeData purges all metric, check, disk, and network rows stored under a
+// node's name. Used when a peer is removed so no orphaned history remains.
+func (db *DB) DeleteNodeData(name string) error {
+	for _, table := range []string{"metric_sample", "check_status", "disk_status", "net_sample"} {
+		if _, err := db.conn.Exec("DELETE FROM "+table+" WHERE node = ?;", name); err != nil {
+			return fmt.Errorf("storage: delete %s for %q: %w", table, name, err)
+		}
+	}
+	return nil
+}
+
 // ListPeers returns all known peers ordered by Name. LastSeen is the zero
 // time.Time when the stored last_seen is 0.
 func (db *DB) ListPeers() ([]Peer, error) {

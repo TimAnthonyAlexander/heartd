@@ -57,12 +57,15 @@ func TestDispatchLocalWritesLocally(t *testing.T) {
 // TestDispatchProxiesToPeer verifies that addressing a peer proxies the write to
 // that peer's settings service (and does NOT touch the local one).
 func TestDispatchProxiesToPeer(t *testing.T) {
-	// Peer B: a full server that accepts the shared secret on /api/peer/*.
+	// Peer B: a full server that accepts the shared secret on /api/peer/* (it
+	// validates inbound secrets against its own peer rows, so it must know A).
 	dbB := testDB(t)
 	setB := settings.New(dbB)
+	if err := dbB.UpsertPeer(storage.Peer{Name: "A", URL: "http://a", Secret: "sek"}); err != nil {
+		t.Fatalf("upsert peer on B: %v", err)
+	}
 	bSrv := httptest.NewServer(New(Config{
-		NodeName: "B", DB: dbB, Settings: setB,
-		Auth: auth.NewService(dbB), PeerSecrets: []string{"sek"},
+		NodeName: "B", DB: dbB, Settings: setB, Auth: auth.NewService(dbB),
 	}))
 	defer bSrv.Close()
 
@@ -112,9 +115,11 @@ func TestProxyUnknownNode(t *testing.T) {
 func TestProxyCheckCRUDToPeer(t *testing.T) {
 	dbB := testDB(t)
 	setB := settings.New(dbB)
+	if err := dbB.UpsertPeer(storage.Peer{Name: "A", URL: "http://a", Secret: "sek"}); err != nil {
+		t.Fatalf("upsert peer on B: %v", err)
+	}
 	bSrv := httptest.NewServer(New(Config{
-		NodeName: "B", DB: dbB, Settings: setB,
-		Auth: auth.NewService(dbB), PeerSecrets: []string{"sek"},
+		NodeName: "B", DB: dbB, Settings: setB, Auth: auth.NewService(dbB),
 	}))
 	defer bSrv.Close()
 

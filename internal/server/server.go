@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/timanthonyalexander/heartd/internal/alert"
 	"github.com/timanthonyalexander/heartd/internal/auth"
 	"github.com/timanthonyalexander/heartd/internal/cluster"
 	"github.com/timanthonyalexander/heartd/internal/metrics"
@@ -29,9 +30,9 @@ type Config struct {
 	DB       *storage.DB
 	Settings *settings.Service
 	Auth     *auth.Service
-	// PeerSecrets are the shared secrets this node accepts on node-to-node
-	// requests (typically the secrets of its configured peers).
-	PeerSecrets []string
+	// Engine is the alert engine, used to forget a node's state when it is
+	// removed. May be nil when alerting is disabled.
+	Engine *alert.Engine
 }
 
 // New builds the root HTTP handler: REST API under /api and the embedded
@@ -55,6 +56,13 @@ func New(cfg Config) http.Handler {
 		mux.Handle(pattern, s.requireAuth(h))
 	}
 	protect("GET /api/nodes", s.handleNodes)
+
+	// Cluster topology (peer) management — the local node's own peer list.
+	protect("GET /api/peers", s.handleListPeers)
+	protect("POST /api/peers", s.handleCreatePeer)
+	protect("PUT /api/peers/{name}", s.handleUpdatePeer)
+	protect("DELETE /api/peers/{name}", s.handleDeletePeer)
+
 	protect("GET /api/nodes/{name}/metrics", s.handleMetrics)
 	protect("GET /api/nodes/{name}/metrics/history", s.handleHistory)
 	protect("GET /api/nodes/{name}/checks", s.handleChecks)
@@ -636,13 +644,21 @@ func (s *server) requireSecret(next http.Handler) http.Handler {
 	})
 }
 
+// validSecret reports whether the presented secret matches any known peer's
+// shared secret. Secrets are read fresh from storage so a peer added or edited in
+// the dashboard is accepted immediately, without a restart. The comparison is
+// constant-time and runs against every peer to avoid early-exit timing leaks.
 func (s *server) validSecret(presented string) bool {
+	peers, err := s.cfg.DB.ListPeers()
+	if err != nil {
+		return false
+	}
 	ok := false
-	for _, secret := range s.cfg.PeerSecrets {
-		if secret == "" {
+	for _, peer := range peers {
+		if peer.Secret == "" {
 			continue
 		}
-		if subtle.ConstantTimeCompare([]byte(presented), []byte(secret)) == 1 {
+		if subtle.ConstantTimeCompare([]byte(presented), []byte(peer.Secret)) == 1 {
 			ok = true
 		}
 	}

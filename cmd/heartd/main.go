@@ -67,20 +67,15 @@ func run(configPath, addrOverride string) error {
 	sched := scheduler.New(db, cfg.Server.Name, set, engine)
 	go sched.Run(ctx)
 
-	// Start the cluster poller (announce + poll peers) when peers are configured.
-	if len(cfg.Peers) > 0 {
-		poller := cluster.New(db, cfg.Server.Name, cfg.Server.AdvertiseURL, set, cfg.Peers, engine)
-		go poller.Run(ctx)
-	}
+	// Start the cluster poller (announce + poll peers). The peer list lives in
+	// storage and is managed live from the dashboard, so the poller always runs
+	// even when no peers are configured yet.
+	poller := cluster.New(db, cfg.Server.Name, cfg.Server.AdvertiseURL, set, engine)
+	go poller.Run(ctx)
 
 	addr := addrOverride
 	if addr == "" {
 		addr = fmt.Sprintf(":%d", cfg.Server.Port)
-	}
-
-	peerSecrets := make([]string, 0, len(cfg.Peers))
-	for _, p := range cfg.Peers {
-		peerSecrets = append(peerSecrets, p.Secret)
 	}
 
 	// Authentication service + periodic expired-session cleanup.
@@ -88,11 +83,11 @@ func run(configPath, addrOverride string) error {
 	go pruneSessions(ctx, authSvc)
 
 	handler := server.New(server.Config{
-		NodeName:    cfg.Server.Name,
-		DB:          db,
-		Settings:    set,
-		Auth:        authSvc,
-		PeerSecrets: peerSecrets,
+		NodeName: cfg.Server.Name,
+		DB:       db,
+		Settings: set,
+		Auth:     authSvc,
+		Engine:   engine,
 	})
 	srv := &http.Server{
 		Addr:              addr,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { fetchMetrics, fetchNodes, type Node } from '../api'
 
 const POLL_MS = 4000
@@ -10,6 +10,8 @@ export interface ClusterState {
   cpuByNode: Record<string, number[]>
   summary: { up: number; total: number }
   ready: boolean
+  // Force an immediate re-fetch of the node list (e.g. after adding/removing).
+  reload: () => void
 }
 
 // useCluster polls the node list and a short rolling CPU history per node so the
@@ -18,6 +20,8 @@ export function useCluster(): ClusterState {
   const [nodes, setNodes] = useState<Node[]>([])
   const [cpuByNode, setCpuByNode] = useState<Record<string, number[]>>({})
   const [ready, setReady] = useState(false)
+  const [nonce, setNonce] = useState(0)
+  const reload = useCallback(() => setNonce((n) => n + 1), [])
 
   useEffect(() => {
     let active = true
@@ -62,8 +66,8 @@ export function useCluster(): ClusterState {
       active = false
       clearTimeout(timer)
     }
-  }, [])
+  }, [nonce])
 
   const up = nodes.filter((n) => n.status === 'ok' || n.local).length
-  return { nodes, cpuByNode, summary: { up, total: nodes.length }, ready }
+  return { nodes, cpuByNode, summary: { up, total: nodes.length }, ready, reload }
 }

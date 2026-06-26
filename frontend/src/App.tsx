@@ -32,7 +32,7 @@ interface AppProps {
 }
 
 export default function App({ username, onLogout }: AppProps) {
-  const { nodes, cpuByNode, summary, ready } = useCluster()
+  const { nodes, cpuByNode, summary, ready, reload } = useCluster()
   const navigate = useNavigate()
   const { name } = useParams()
   const selected = name ?? null
@@ -68,6 +68,7 @@ export default function App({ username, onLogout }: AppProps) {
         navigate(`/node/${encodeURIComponent(n)}`)
         setDrawerOpen(false)
       }}
+      onChanged={reload}
     />
   )
 

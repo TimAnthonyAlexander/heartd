@@ -115,6 +115,41 @@ export function fetchNodes(signal?: AbortSignal): Promise<Node[]> {
   return getJSON<Node[]>('/api/nodes', signal)
 }
 
+// ----- Cluster topology (peer management) -----
+
+export interface PeerInfo {
+  name: string
+  url: string
+  status: NodeStatus
+  last_seen: string
+  last_error: string
+  has_secret: boolean
+}
+
+export interface PeerInput {
+  name: string
+  url: string
+  secret: string
+}
+
+export function fetchPeers(signal?: AbortSignal): Promise<PeerInfo[]> {
+  return getJSON<PeerInfo[]>('/api/peers', signal)
+}
+
+export function createPeer(p: PeerInput): Promise<PeerInfo> {
+  return postJSON<PeerInfo>('/api/peers', p)
+}
+
+// updatePeer sends url and (optionally) a new secret; a blank secret keeps the
+// stored one. The name is the identity key and cannot be changed.
+export function updatePeer(name: string, url: string, secret: string): Promise<PeerInfo> {
+  return putJSON<PeerInfo>(`/api/peers/${encodeURIComponent(name)}`, { url, secret })
+}
+
+export function deletePeer(name: string): Promise<{ status: string }> {
+  return delJSON<{ status: string }>(`/api/peers/${encodeURIComponent(name)}`)
+}
+
 export function fetchMetrics(nodeName: string, signal?: AbortSignal): Promise<Metrics> {
   return getJSON<Metrics>(`/api/nodes/${encodeURIComponent(nodeName)}/metrics`, signal)
 }

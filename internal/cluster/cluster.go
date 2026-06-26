@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/timanthonyalexander/heartd/internal/alert"
-	"github.com/timanthonyalexander/heartd/internal/config"
 	"github.com/timanthonyalexander/heartd/internal/settings"
 	"github.com/timanthonyalexander/heartd/internal/storage"
 )
@@ -67,36 +66,37 @@ type peerNet struct {
 	At        string  `json:"at"`
 }
 
-// Poller announces this node to peers and polls them on an interval.
+// Poller announces this node to peers and polls them on an interval. The peer
+// list is read fresh from storage each cycle, so peers added or removed in the
+// dashboard take effect without a restart.
 type Poller struct {
 	db           *storage.DB
 	selfName     string
 	advertiseURL string
 	settings     *settings.Service
-	peers        []config.Peer
 	client       *http.Client
 	engine       *alert.Engine // optional; nil when alerting is disabled
 }
 
 const fallbackPollInterval = 15 * time.Second
 
-// New builds a Poller for the configured peers. engine may be nil.
-func New(db *storage.DB, selfName, advertiseURL string, set *settings.Service, peers []config.Peer, engine *alert.Engine) *Poller {
+// New builds a Poller. The peer list lives in storage (seeded once from config
+// on first run); engine may be nil.
+func New(db *storage.DB, selfName, advertiseURL string, set *settings.Service, engine *alert.Engine) *Poller {
 	return &Poller{
 		db:           db,
 		selfName:     selfName,
 		advertiseURL: advertiseURL,
 		settings:     set,
-		peers:        peers,
 		client:       &http.Client{Timeout: 8 * time.Second},
 		engine:       engine,
 	}
 }
 
-// Run seeds peers into storage, announces this node to them, then polls all
-// peers once immediately and once per current interval until ctx is cancelled.
+// Run primes alert state, announces this node to its peers, then polls all peers
+// once immediately and once per current interval until ctx is cancelled. The
+// peer list is re-read from storage each cycle.
 func (p *Poller) Run(ctx context.Context) {
-	p.seedPeers()
 	p.seedAlertState()
 	p.announceAll(ctx)
 
@@ -115,13 +115,14 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
-// seedPeers writes the configured peers (with their secrets) into storage.
-func (p *Poller) seedPeers() {
-	for _, peer := range p.peers {
-		if err := p.db.UpsertPeer(storage.Peer{Name: peer.Name, URL: peer.URL, Secret: peer.Secret}); err != nil {
-			log.Printf("cluster: seed peer %q failed: %v", peer.Name, err)
-		}
+// peers returns the current peer list from storage (the source of truth).
+func (p *Poller) peers() []storage.Peer {
+	peers, err := p.db.ListPeers()
+	if err != nil {
+		log.Printf("cluster: list peers failed: %v", err)
+		return nil
 	}
+	return peers
 }
 
 // seedAlertState primes the alert engine with each peer's last persisted status
@@ -130,23 +131,18 @@ func (p *Poller) seedAlertState() {
 	if p.engine == nil {
 		return
 	}
-	peers, err := p.db.ListPeers()
-	if err != nil {
-		log.Printf("cluster: seed alert state failed: %v", err)
-		return
-	}
-	for _, peer := range peers {
+	for _, peer := range p.peers() {
 		p.engine.SeedPeer(peer.Name, peer.Status)
 	}
 }
 
-// announceAll tells each configured peer about this node (best-effort).
+// announceAll tells each known peer about this node (best-effort).
 func (p *Poller) announceAll(ctx context.Context) {
 	if p.advertiseURL == "" {
 		return // nothing useful to advertise
 	}
 	body, _ := json.Marshal(AnnounceRequest{Name: p.selfName, URL: p.advertiseURL})
-	for _, peer := range p.peers {
+	for _, peer := range p.peers() {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, peer.URL+"/api/peer/announce", bytes.NewReader(body))
 		if err != nil {
 			continue
@@ -162,12 +158,12 @@ func (p *Poller) announceAll(ctx context.Context) {
 	}
 }
 
-// pollAll polls every configured peer concurrently.
+// pollAll polls every known peer concurrently.
 func (p *Poller) pollAll(ctx context.Context) {
 	var wg sync.WaitGroup
-	for _, peer := range p.peers {
+	for _, peer := range p.peers() {
 		wg.Add(1)
-		go func(peer config.Peer) {
+		go func(peer storage.Peer) {
 			defer wg.Done()
 			p.pollPeer(ctx, peer)
 		}(peer)
@@ -177,7 +173,7 @@ func (p *Poller) pollAll(ctx context.Context) {
 
 // pollPeer fetches a peer's metrics and checks, storing them under the peer's
 // name, and records reachability. A metrics-fetch failure marks the peer down.
-func (p *Poller) pollPeer(ctx context.Context, peer config.Peer) {
+func (p *Poller) pollPeer(ctx context.Context, peer storage.Peer) {
 	m, err := p.fetchMetrics(ctx, peer)
 	if err != nil {
 		// Preserve last-seen (zero time) and record the error as "down".
@@ -233,7 +229,7 @@ func (p *Poller) pollPeer(ctx context.Context, peer config.Peer) {
 }
 
 // storePeerDisk fetches a peer's disk usage and records it under the peer's name.
-func (p *Poller) storePeerDisk(ctx context.Context, peer config.Peer) {
+func (p *Poller) storePeerDisk(ctx context.Context, peer storage.Peer) {
 	var disks []peerDisk
 	if err := p.getJSON(ctx, peer, "/api/peer/disk", &disks); err != nil {
 		return
@@ -255,7 +251,7 @@ func (p *Poller) storePeerDisk(ctx context.Context, peer config.Peer) {
 
 // storePeerNet fetches a peer's latest network sample and records it under the
 // peer's name.
-func (p *Poller) storePeerNet(ctx context.Context, peer config.Peer) {
+func (p *Poller) storePeerNet(ctx context.Context, peer storage.Peer) {
 	var n peerNet
 	if err := p.getJSON(ctx, peer, "/api/peer/network", &n); err != nil {
 		return
@@ -273,7 +269,7 @@ func (p *Poller) storePeerNet(ctx context.Context, peer config.Peer) {
 	})
 }
 
-func (p *Poller) fetchMetrics(ctx context.Context, peer config.Peer) (peerMetrics, error) {
+func (p *Poller) fetchMetrics(ctx context.Context, peer storage.Peer) (peerMetrics, error) {
 	var m peerMetrics
 	if err := p.getJSON(ctx, peer, "/api/peer/metrics", &m); err != nil {
 		return peerMetrics{}, err
@@ -281,7 +277,7 @@ func (p *Poller) fetchMetrics(ctx context.Context, peer config.Peer) (peerMetric
 	return m, nil
 }
 
-func (p *Poller) fetchChecks(ctx context.Context, peer config.Peer) ([]peerCheck, error) {
+func (p *Poller) fetchChecks(ctx context.Context, peer storage.Peer) ([]peerCheck, error) {
 	var c []peerCheck
 	if err := p.getJSON(ctx, peer, "/api/peer/checks", &c); err != nil {
 		return nil, err
@@ -289,7 +285,7 @@ func (p *Poller) fetchChecks(ctx context.Context, peer config.Peer) ([]peerCheck
 	return c, nil
 }
 
-func (p *Poller) getJSON(ctx context.Context, peer config.Peer, path string, out any) error {
+func (p *Poller) getJSON(ctx context.Context, peer storage.Peer, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, peer.URL+path, nil)
 	if err != nil {
 		return err

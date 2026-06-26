@@ -2,6 +2,7 @@ package alert
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +59,27 @@ func (e *Engine) SeedPeer(name, status string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.peerState[name] = status
+}
+
+// ForgetNode discards all remembered state for a node — its peer status, every
+// check keyed to it, and its metric-threshold flags. Called when a node is
+// removed so a later re-add starts from a clean baseline rather than inheriting
+// stale state (which could suppress or spuriously fire an alert).
+func (e *Engine) ForgetNode(name string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.peerState, name)
+	prefix := name + "|"
+	for k := range e.checkState {
+		if strings.HasPrefix(k, prefix) {
+			delete(e.checkState, k)
+		}
+	}
+	for k := range e.metricOver {
+		if strings.HasPrefix(k, prefix) {
+			delete(e.metricOver, k)
+		}
+	}
 }
 
 // ObserveCheck compares a check's new status to its last known status and

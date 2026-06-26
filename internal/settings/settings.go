@@ -157,6 +157,15 @@ func (s *Service) seed(cfg config.Config) error {
 			return err
 		}
 	}
+
+	// Seed the peer list from config ONCE. After first run the peer table is the
+	// source of truth and is managed live from the dashboard, so peers removed in
+	// the UI are not resurrected from YAML on the next restart.
+	for _, p := range cfg.Peers {
+		if err := s.db.UpsertPeer(storage.Peer{Name: p.Name, URL: p.URL, Secret: p.Secret}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
