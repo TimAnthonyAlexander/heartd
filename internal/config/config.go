@@ -98,6 +98,7 @@ type Config struct {
 // Server holds node-level settings.
 type Server struct {
 	Name            string     `yaml:"name"`             // node name; default = os.Hostname() or "heartd"
+	DisplayName     string     `yaml:"display_name"`     // optional UI label for this node; seeded as the local alias on first run
 	Port            int        `yaml:"port"`             // default 9300
 	MetricsInterval Duration   `yaml:"metrics_interval"` // how often to sample metrics; default 30s
 	Retention       Duration   `yaml:"retention"`        // rolling metric retention window; default 7 days (168h)

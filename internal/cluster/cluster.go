@@ -291,6 +291,7 @@ func (p *Poller) pollPeer(ctx context.Context, peer storage.Peer) {
 	p.storePeerDisk(ctx, peer)
 	p.storePeerNet(ctx, peer)
 	p.storePeerDiskIO(ctx, peer)
+	p.storePeerIdentity(ctx, peer)
 
 	_ = p.db.SetPeerStatus(peer.Name, "ok", time.Now().UTC(), "")
 }
@@ -357,6 +358,27 @@ func (p *Poller) storePeerDiskIO(ctx context.Context, peer storage.Peer) {
 			WriteOpsRate:   io.WriteOpsRate,
 			At:             at,
 		})
+	}
+}
+
+// storePeerIdentity fetches a peer's self-advertised display name and records it
+// as that peer's advertised alias, so a name set once on a node propagates to
+// this dashboard. A blank name, or one equal to the peer's real name, clears the
+// advertised alias (the peer advertises no distinct label). Best-effort: a
+// failure here leaves any existing alias untouched and does not affect the poll.
+func (p *Poller) storePeerIdentity(ctx context.Context, peer storage.Peer) {
+	var id Identity
+	if err := p.getJSON(ctx, peer, "/api/peer/identity", &id); err != nil {
+		return
+	}
+	if id.DisplayName != "" && id.DisplayName != peer.Name {
+		if err := p.db.SetAdvertisedAlias(peer.Name, id.DisplayName); err != nil {
+			log.Printf("cluster: store peer %q advertised alias failed: %v", peer.Name, err)
+		}
+		return
+	}
+	if err := p.db.SetAdvertisedAlias(peer.Name, ""); err != nil {
+		log.Printf("cluster: clear peer %q advertised alias failed: %v", peer.Name, err)
 	}
 }
 

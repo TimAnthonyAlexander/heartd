@@ -73,6 +73,7 @@ func New(cfg Config) http.Handler {
 	mux.Handle("POST /api/peer/announce", s.requireSecret(http.HandlerFunc(s.handlePeerAnnounce)))
 	mux.Handle("GET /api/peer/members", s.requireSecret(http.HandlerFunc(s.handlePeerMembers)))
 	mux.Handle("GET /api/peer/whoami", s.requireSecret(http.HandlerFunc(s.handlePeerWhoami)))
+	mux.Handle("GET /api/peer/identity", s.requireSecret(http.HandlerFunc(s.handlePeerIdentity)))
 	mux.Handle("GET /api/peer/metrics", s.requireSecret(http.HandlerFunc(s.handlePeerMetrics)))
 	mux.Handle("GET /api/peer/checks", s.requireSecret(http.HandlerFunc(s.handlePeerChecks)))
 	mux.Handle("GET /api/peer/disk", s.requireSecret(http.HandlerFunc(s.handlePeerDisk)))
@@ -1039,6 +1040,21 @@ func (s *server) handlePeerAnnounce(w http.ResponseWriter, r *http.Request) {
 // relying on names (which default to hostnames) or a possibly-wrong advertise_url.
 func (s *server) handlePeerWhoami(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, cluster.WhoAmI{Name: s.cfg.NodeName})
+}
+
+// handlePeerIdentity returns this node's real name plus its own effective
+// display name (the local alias or config display_name; advertised is irrelevant
+// for the node itself). A polling peer stores the display name as this node's
+// advertised alias so the label propagates across the cluster. DisplayName falls
+// back to the real name when no distinct label is set.
+func (s *server) handlePeerIdentity(w http.ResponseWriter, r *http.Request) {
+	display := s.cfg.NodeName
+	if aliases, err := s.cfg.DB.NodeAliases(); err == nil {
+		if a := aliases[s.cfg.NodeName]; a != "" {
+			display = a
+		}
+	}
+	writeJSON(w, http.StatusOK, cluster.Identity{Name: s.cfg.NodeName, DisplayName: display})
 }
 
 // handlePeerMembers serves this node's view of cluster membership: itself (when

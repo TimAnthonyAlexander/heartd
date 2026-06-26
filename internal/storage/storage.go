@@ -103,8 +103,9 @@ CREATE TABLE IF NOT EXISTS disk_io_sample (
 CREATE INDEX IF NOT EXISTS idx_disk_io_sample_node_at ON disk_io_sample(node, at);
 CREATE INDEX IF NOT EXISTS idx_disk_io_sample_node_device_at ON disk_io_sample(node, device, at);
 CREATE TABLE IF NOT EXISTS node_alias (
-    node  TEXT PRIMARY KEY,
-    alias TEXT NOT NULL
+    node             TEXT PRIMARY KEY,
+    alias            TEXT NOT NULL,
+    advertised_alias TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS user (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -215,6 +216,7 @@ func ensureColumns(conn *sql.DB) error {
 		{"metric_sample", "swap_used", "INTEGER NOT NULL DEFAULT 0"},
 		{"metric_sample", "swap_total", "INTEGER NOT NULL DEFAULT 0"},
 		{"metric_sample", "swap_percent", "REAL NOT NULL DEFAULT 0"},
+		{"node_alias", "advertised_alias", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, m := range migrations {
 		has, err := hasColumn(conn, m.table, m.name)

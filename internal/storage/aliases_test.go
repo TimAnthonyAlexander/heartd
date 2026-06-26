@@ -79,3 +79,99 @@ func TestDeleteNodeAliasMissingNoError(t *testing.T) {
 		t.Errorf("DeleteNodeAlias on missing node should be a no-op, got: %v", err)
 	}
 }
+
+func TestAdvertisedAliasShownWhenNoLocal(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.SetAdvertisedAlias("web-01", "Advertised name"); err != nil {
+		t.Fatalf("SetAdvertisedAlias: %v", err)
+	}
+	aliases, err := db.NodeAliases()
+	if err != nil {
+		t.Fatalf("NodeAliases: %v", err)
+	}
+	if got := aliases["web-01"]; got != "Advertised name" {
+		t.Errorf("effective = %q, want propagated %q", got, "Advertised name")
+	}
+}
+
+func TestLocalAliasWinsOverAdvertised(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.SetAdvertisedAlias("web-01", "Advertised name"); err != nil {
+		t.Fatalf("SetAdvertisedAlias: %v", err)
+	}
+	if err := db.SetNodeAlias("web-01", "Local override"); err != nil {
+		t.Fatalf("SetNodeAlias: %v", err)
+	}
+	aliases, err := db.NodeAliases()
+	if err != nil {
+		t.Fatalf("NodeAliases: %v", err)
+	}
+	if got := aliases["web-01"]; got != "Local override" {
+		t.Errorf("effective = %q, want local %q", got, "Local override")
+	}
+}
+
+func TestClearingLocalRevealsAdvertised(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.SetAdvertisedAlias("web-01", "Advertised name"); err != nil {
+		t.Fatalf("SetAdvertisedAlias: %v", err)
+	}
+	if err := db.SetNodeAlias("web-01", "Local override"); err != nil {
+		t.Fatalf("SetNodeAlias: %v", err)
+	}
+	// Clearing the local override must reveal the propagated name, not delete it.
+	if err := db.DeleteNodeAlias("web-01"); err != nil {
+		t.Fatalf("DeleteNodeAlias: %v", err)
+	}
+	aliases, err := db.NodeAliases()
+	if err != nil {
+		t.Fatalf("NodeAliases: %v", err)
+	}
+	if got := aliases["web-01"]; got != "Advertised name" {
+		t.Errorf("after clearing local, effective = %q, want advertised %q", got, "Advertised name")
+	}
+}
+
+func TestSetNodeAliasPreservesAdvertised(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.SetAdvertisedAlias("web-01", "Advertised name"); err != nil {
+		t.Fatalf("SetAdvertisedAlias: %v", err)
+	}
+	if err := db.SetNodeAlias("web-01", "Local override"); err != nil {
+		t.Fatalf("SetNodeAlias: %v", err)
+	}
+	// A new advertised value (e.g. peer renamed itself) must not disturb the local
+	// override, and clearing local then reveals the UPDATED advertised value.
+	if err := db.SetAdvertisedAlias("web-01", "Renamed"); err != nil {
+		t.Fatalf("SetAdvertisedAlias (update): %v", err)
+	}
+	if err := db.DeleteNodeAlias("web-01"); err != nil {
+		t.Fatalf("DeleteNodeAlias: %v", err)
+	}
+	aliases, err := db.NodeAliases()
+	if err != nil {
+		t.Fatalf("NodeAliases: %v", err)
+	}
+	if got := aliases["web-01"]; got != "Renamed" {
+		t.Errorf("effective = %q, want updated advertised %q", got, "Renamed")
+	}
+}
+
+func TestClearAdvertisedRevertsToRealName(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.SetAdvertisedAlias("web-01", "Advertised name"); err != nil {
+		t.Fatalf("SetAdvertisedAlias: %v", err)
+	}
+	// Peer stopped advertising a label: clearing advertised drops the node from
+	// the effective map so the dashboard reverts to the real name.
+	if err := db.SetAdvertisedAlias("web-01", ""); err != nil {
+		t.Fatalf("SetAdvertisedAlias clear: %v", err)
+	}
+	aliases, err := db.NodeAliases()
+	if err != nil {
+		t.Fatalf("NodeAliases: %v", err)
+	}
+	if _, ok := aliases["web-01"]; ok {
+		t.Errorf("expected node absent after clearing advertised, got %v", aliases)
+	}
+}

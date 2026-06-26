@@ -38,6 +38,16 @@ type WhoAmI struct {
 	Name string `json:"name"`
 }
 
+// Identity is the body returned by GET /api/peer/identity: a node's real name
+// plus its own effective display name. Pollers fetch it to learn the label a
+// node advertises for itself, so a display name set once on a node propagates to
+// every dashboard that polls it. DisplayName is empty (or equal to Name) when
+// the node advertises no distinct label.
+type Identity struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+}
+
 // gossip learns about peers-of-peers and adds any this node can reach but does
 // not yet know. Membership converges across the cluster: a node added on ONE
 // machine propagates to the others within a cycle or two, with no manual fan-out.

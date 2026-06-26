@@ -228,6 +228,16 @@ func (s *Service) seed(cfg config.Config) error {
 			return err
 		}
 	}
+
+	// Seed this node's own display name as its LOCAL alias ONCE, so an operator
+	// can label each node in its own YAML and have that name propagate to every
+	// dashboard that polls it. Gated by the same first-run flag as the rest of
+	// seed(), so a later dashboard rename is never clobbered on restart.
+	if cfg.Server.DisplayName != "" {
+		if err := s.db.SetNodeAlias(cfg.Server.Name, cfg.Server.DisplayName); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
