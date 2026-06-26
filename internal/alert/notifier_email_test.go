@@ -9,6 +9,17 @@ import (
 	"github.com/timanthonyalexander/heartd/internal/config"
 )
 
+// Port 465 must use implicit TLS (SMTPS); 587/25 use STARTTLS. Getting this
+// wrong is why a 465 send hangs.
+func TestImplicitTLSByPort(t *testing.T) {
+	cases := map[int]bool{465: true, 587: false, 25: false, 2525: false}
+	for port, want := range cases {
+		if got := implicitTLS(port); got != want {
+			t.Errorf("implicitTLS(%d) = %v, want %v", port, got, want)
+		}
+	}
+}
+
 func testAlert() Alert {
 	return Alert{
 		Kind:    KindMetric,

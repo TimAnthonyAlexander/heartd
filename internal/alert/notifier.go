@@ -3,9 +3,11 @@ package alert
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/smtp"
 	"strconv"
@@ -101,19 +103,27 @@ func NewEmailNotifier(cfg config.EmailNotify) *EmailNotifier {
 // Name implements Notifier.
 func (e *EmailNotifier) Name() string { return "email" }
 
-// Send builds an RFC 822 message and sends it via net/smtp.SendMail.
+// implicitTLS reports whether a port speaks TLS from the first byte (SMTPS).
+// Port 465 is implicit TLS; 587 and 25 are plaintext with optional STARTTLS.
+func implicitTLS(port int) bool { return port == 465 }
+
+// Send delivers the alert over SMTP, honoring ctx for both the connect and the
+// conversation, and picking the right transport for the port:
 //
-// net/smtp does not accept a context, and SendMail's underlying net.Dial has no
-// timeout — so against an unreachable host (or a bogus port) it can block on the
-// OS TCP connect for over a minute, hanging the caller (e.g. the "send test"
-// button) the whole time. We guard that two ways: validate the target up front
-// (so a missing host or invalid port fails instantly with a clear message), and
-// race SendMail against ctx so the call returns as soon as the deadline fires.
+//   - 465 (SMTPS): the socket is TLS from the first byte. net/smtp.SendMail
+//     CANNOT do this — it speaks plaintext then optional STARTTLS — so a 465
+//     send with SendMail hangs (the server waits for a TLS handshake that never
+//     comes). We wrap the connection in TLS up front instead.
+//   - 587 / 25: plaintext, upgraded with STARTTLS when the server offers it.
+//
+// The target is validated first so a missing host or invalid port (e.g. the
+// unset default 0) fails instantly with a clear message.
 func (e *EmailNotifier) Send(ctx context.Context, a Alert) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(e.cfg.SMTPHost) == "" {
+	host := strings.TrimSpace(e.cfg.SMTPHost)
+	if host == "" {
 		return fmt.Errorf("SMTP host is not set")
 	}
 	if e.cfg.SMTPPort <= 0 || e.cfg.SMTPPort > 65535 {
@@ -123,30 +133,63 @@ func (e *EmailNotifier) Send(ctx context.Context, a Alert) error {
 		return fmt.Errorf("no recipient address set")
 	}
 
-	addr := e.cfg.SMTPHost + ":" + strconv.Itoa(e.cfg.SMTPPort)
+	addr := host + ":" + strconv.Itoa(e.cfg.SMTPPort)
+	tlsConfig := &tls.Config{ServerName: host}
 
-	var auth smtp.Auth
-	if e.cfg.Username != "" {
-		auth = smtp.PlainAuth("", e.cfg.Username, e.cfg.Password, e.cfg.SMTPHost)
+	// Context-aware connect: an unreachable server fails by the deadline rather
+	// than blocking on the OS TCP connect timeout.
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("send email to %s: %w", addr, err)
+	}
+	// Bound the rest of the SMTP conversation by the same deadline.
+	if dl, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(dl)
+	}
+	if implicitTLS(e.cfg.SMTPPort) {
+		conn = tls.Client(conn, tlsConfig)
 	}
 
-	msg := buildEmailMessage(e.cfg, a)
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("send email to %s: %w", addr, err)
+	}
+	defer c.Close()
 
-	// SendMail blocks and ignores ctx; run it off-goroutine and return when
-	// either it finishes or ctx is done. The buffered channel lets a late-
-	// finishing send drain without leaking the goroutine.
-	done := make(chan error, 1)
-	go func() { done <- smtp.SendMail(addr, auth, e.cfg.From, e.cfg.To, msg) }()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("send email: %w", err)
+	if !implicitTLS(e.cfg.SMTPPort) {
+		if ok, _ := c.Extension("STARTTLS"); ok {
+			if err := c.StartTLS(tlsConfig); err != nil {
+				return fmt.Errorf("STARTTLS with %s: %w", addr, err)
+			}
 		}
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("send email to %s timed out (check the SMTP host, port, and connectivity): %w", addr, ctx.Err())
 	}
+
+	if e.cfg.Username != "" {
+		if err := c.Auth(smtp.PlainAuth("", e.cfg.Username, e.cfg.Password, host)); err != nil {
+			return fmt.Errorf("SMTP auth failed (check username/password): %w", err)
+		}
+	}
+
+	if err := c.Mail(e.cfg.From); err != nil {
+		return fmt.Errorf("SMTP MAIL FROM %q: %w", e.cfg.From, err)
+	}
+	for _, rcpt := range e.cfg.To {
+		if err := c.Rcpt(rcpt); err != nil {
+			return fmt.Errorf("SMTP RCPT %q: %w", rcpt, err)
+		}
+	}
+	w, err := c.Data()
+	if err != nil {
+		return fmt.Errorf("SMTP DATA: %w", err)
+	}
+	if _, err := w.Write(buildEmailMessage(e.cfg, a)); err != nil {
+		return fmt.Errorf("write message body: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("close message body: %w", err)
+	}
+	return c.Quit()
 }
 
 // buildEmailMessage constructs the raw RFC 822 message bytes for an alert. It is
