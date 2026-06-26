@@ -29,6 +29,7 @@ const (
 type Alert struct {
 	Kind     Kind      // rule (or legacy check|peer|metric)
 	RuleID   int64     // the alert rule that produced this (0 if none)
+	Source   string    // rule source (cpu|mem|disk|peer|nodata|...); part of the dedup key
 	Node     string    // node the alert concerns
 	Entity   string    // mount / check / peer the rule targets ("" if n/a)
 	Subject  string    // rule name (or legacy check/peer/metric name)

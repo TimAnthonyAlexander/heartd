@@ -19,6 +19,7 @@ const (
 type RuleView struct {
 	ID           int64
 	Name         string
+	Source       string // rule source (cpu|peer|nodata|…); carried into the dedup key
 	Severity     string // warning | critical
 	ForSec       int64  // sustained duration before firing
 	RecoverGrace int64  // keep-firing-for after recovery (anti-flap)
@@ -150,6 +151,7 @@ func (e *Engine) Observe(rule RuleView, node, entity, detail string, conditionMe
 	}
 	toFire.Kind = KindRule
 	toFire.RuleID = rule.ID
+	toFire.Source = rule.Source
 	toFire.Node = node
 	toFire.Entity = entity
 	toFire.Subject = rule.Name

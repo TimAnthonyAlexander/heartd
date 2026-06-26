@@ -71,11 +71,13 @@ func NewCoordinator(selfName string, peers PeerLister) *Coordinator {
 	}
 }
 
-// incidentKey identifies an incident across observers: same dead node + entity +
-// firing/recovered state yields the same key on every watcher, regardless of the
-// (differently named) rule that produced it.
+// incidentKey identifies an incident across observers: same source + dead node +
+// entity + firing/recovered state yields the same key on every watcher,
+// regardless of the (differently named) rule that produced it. Including the
+// source keeps distinct alerts about one peer separate — e.g. "unreachable"
+// (peer) and "stale data" (nodata) each get their own mail.
 func incidentKey(a Alert) string {
-	return a.Node + "|" + a.Entity + "|" + a.Status()
+	return a.Source + "|" + a.Node + "|" + a.Entity + "|" + a.Status()
 }
 
 // minName returns the lexicographically smaller non-empty name.

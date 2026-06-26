@@ -37,7 +37,22 @@ func coordServer(c *Coordinator) *httptest.Server {
 }
 
 func peerDown() Alert {
-	return Alert{Kind: KindRule, Node: "x", Firing: true, Severity: "critical", Title: "x unreachable"}
+	return Alert{Kind: KindRule, Source: "peer", Node: "x", Firing: true, Severity: "critical", Title: "x unreachable"}
+}
+
+// Two different alert sources about the same peer (e.g. unreachable vs stale
+// data) must NOT share a key, so each still produces its own mail.
+func TestIncidentKeyIncludesSource(t *testing.T) {
+	unreachable := Alert{Source: "peer", Node: "x", Firing: true}
+	stale := Alert{Source: "nodata", Node: "x", Firing: true}
+	if incidentKey(unreachable) == incidentKey(stale) {
+		t.Fatalf("distinct sources must not collapse: %q == %q", incidentKey(unreachable), incidentKey(stale))
+	}
+	// Same incident from different watchers still matches (source is a stable enum,
+	// not the rule name).
+	if incidentKey(unreachable) != incidentKey(Alert{Source: "peer", Node: "x", Firing: true}) {
+		t.Fatal("same source+node+state must share a key across watchers")
+	}
 }
 
 func TestCoordinatorSelfAlertAlwaysSends(t *testing.T) {

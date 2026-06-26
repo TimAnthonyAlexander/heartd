@@ -53,7 +53,7 @@ func (r *Runner) evaluate(seed bool, now time.Time) {
 }
 
 func view(rule storage.AlertRule) RuleView {
-	return RuleView{ID: rule.ID, Name: rule.Name, Severity: rule.Severity, ForSec: rule.ForSec, RecoverGrace: rule.RecoverGrace}
+	return RuleView{ID: rule.ID, Name: rule.Name, Source: rule.Source, Severity: rule.Severity, ForSec: rule.ForSec, RecoverGrace: rule.RecoverGrace}
 }
 
 func (r *Runner) evalRule(rule storage.AlertRule, seed bool, now time.Time) {
