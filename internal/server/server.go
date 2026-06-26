@@ -36,6 +36,9 @@ type Config struct {
 	// Engine is the alert engine, used to forget a node's state when it is
 	// removed. May be nil when alerting is disabled.
 	Engine *alert.Engine
+	// Coordinator deduplicates peer alerts across nodes; it backs the
+	// /api/peer/alert-claim and /api/peer/alert-sent endpoints. May be nil.
+	Coordinator *alert.Coordinator
 	// Headless serves only /api/health + /api/peer/* (no dashboard / auth / user
 	// endpoints) — the node is an agent managed from another node.
 	Headless bool
@@ -70,6 +73,11 @@ func New(cfg Config) http.Handler {
 	mux.Handle("GET /api/peer/checks", s.requireSecret(http.HandlerFunc(s.handlePeerChecks)))
 	mux.Handle("GET /api/peer/disk", s.requireSecret(http.HandlerFunc(s.handlePeerDisk)))
 	mux.Handle("GET /api/peer/network", s.requireSecret(http.HandlerFunc(s.handlePeerNetwork)))
+
+	// Cross-node alert dedup: peers claim an incident and announce delivery here
+	// so only one node mails about a shared event (e.g. a third node going down).
+	mux.Handle("POST /api/peer/alert-claim", s.requireSecret(http.HandlerFunc(s.handleAlertClaim)))
+	mux.Handle("POST /api/peer/alert-sent", s.requireSecret(http.HandlerFunc(s.handleAlertSent)))
 
 	// Node-to-node settings: the receive side of the proxy above. Same handlers
 	// the local node uses, operating on THIS node's own settings service.
@@ -816,6 +824,40 @@ func normalizeAddr(rawURL string) (string, bool) {
 		}
 	}
 	return host + ":" + port, true
+}
+
+// alertCoordMsg is the body for the alert-claim / alert-sent peer endpoints.
+type alertCoordMsg struct {
+	Key  string `json:"key"`
+	Node string `json:"node"`
+}
+
+// handleAlertClaim records a peer's claim on an incident and reports the current
+// owner (smallest-named claimant) and whether anyone has already sent it.
+func (s *server) handleAlertClaim(w http.ResponseWriter, r *http.Request) {
+	var in alertCoordMsg
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	if s.cfg.Coordinator == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"owner": in.Node, "sent": false})
+		return
+	}
+	owner, sent := s.cfg.Coordinator.HandleClaim(in.Node, in.Key, time.Now().UTC())
+	writeJSON(w, http.StatusOK, map[string]any{"owner": owner, "sent": sent})
+}
+
+// handleAlertSent records that a peer delivered an incident, so this node
+// suppresses its own copy.
+func (s *server) handleAlertSent(w http.ResponseWriter, r *http.Request) {
+	var in alertCoordMsg
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	if s.cfg.Coordinator != nil {
+		s.cfg.Coordinator.HandleSent(in.Node, in.Key, time.Now().UTC())
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handlePeerMetrics returns this node's own current metrics to a peer.

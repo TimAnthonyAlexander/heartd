@@ -60,6 +60,12 @@ func run(configPath, addrOverride string, headlessFlag bool) error {
 	// edits apply without a restart.
 	engine := buildAlertEngine(set)
 
+	// Cross-node alert dedup: when several nodes watch the same peer, only one
+	// of them mails about a shared event (e.g. a third node going down). Single-
+	// node setups have no peers, so this is a no-op there.
+	coordinator := alert.NewCoordinator(cfg.Server.Name, db)
+	engine.SetCoordinator(coordinator)
+
 	// Start the metrics collection loop.
 	coll := collector.New(db, cfg.Server.Name, set)
 	go coll.Run(ctx)
@@ -99,6 +105,7 @@ func run(configPath, addrOverride string, headlessFlag bool) error {
 		Settings:     set,
 		Auth:         authSvc,
 		Engine:       engine,
+		Coordinator:  coordinator,
 		Headless:     headless,
 		ExtraSecrets: extraSecrets,
 	})

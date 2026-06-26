@@ -2,6 +2,7 @@ package alert
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,7 @@ type ruleState struct {
 // timers. It is safe for concurrent use.
 type Engine struct {
 	dispatcher dispatcher
+	coord      *Coordinator // optional cross-node dedup; nil = send everything locally
 
 	mu    sync.Mutex
 	state map[string]ruleState
@@ -44,6 +46,27 @@ type Engine struct {
 // NewEngine builds an Engine that dispatches via d.
 func NewEngine(d *Dispatcher) *Engine {
 	return &Engine{dispatcher: d, state: make(map[string]ruleState)}
+}
+
+// SetCoordinator enables cross-node alert deduplication. When set, alerts about
+// a peer are gated through the Coordinator so only one node delivers them.
+func (e *Engine) SetCoordinator(c *Coordinator) { e.coord = c }
+
+// gatedDispatch sends a through the coordinator (off the caller's goroutine, so
+// the runner loop never blocks on peer queries) when one is configured; without
+// a coordinator it dispatches directly.
+func (e *Engine) gatedDispatch(a Alert) {
+	if e.coord == nil {
+		e.dispatcher.Dispatch(a)
+		return
+	}
+	go func() {
+		if e.coord.ShouldSend(a) {
+			e.dispatcher.Dispatch(a)
+		} else {
+			log.Printf("alert: suppressed %q — another node is notifying about this incident", a.Title)
+		}
+	}()
 }
 
 func ruleKey(ruleID int64, node, entity string) string {
@@ -132,7 +155,7 @@ func (e *Engine) Observe(rule RuleView, node, entity, detail string, conditionMe
 	toFire.Subject = rule.Name
 	toFire.Severity = severity
 	toFire.Time = now.UTC()
-	e.dispatcher.Dispatch(*toFire)
+	e.gatedDispatch(*toFire)
 }
 
 // Forget drops all remembered state for a rule (e.g. when it is deleted), so a
