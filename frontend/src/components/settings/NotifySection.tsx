@@ -1,9 +1,15 @@
 import { useState } from 'react'
 import { Box, Button, FormControlLabel, Stack, Switch, TextField, Typography } from '@mui/material'
 import type { EmailNotify, NotifySettings, WebhookNotify } from '../../api'
-import { testNotify, updateNotify } from '../../api'
+import { fetchNodes, testNotify, updateNotify } from '../../api'
 import { colors } from '../../theme'
 import { FeedbackText, SaveButton, Section, type Feedback } from './shared'
+
+// Result of fanning the notify config out to every node.
+interface BulkResult {
+  total: number
+  failed: { name: string; error: string }[]
+}
 
 interface Props {
   nodeName: string
@@ -38,6 +44,8 @@ export function NotifySection({ nodeName, initial, onSaved }: Props) {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<Record<string, string> | null>(null)
   const [testError, setTestError] = useState<string | null>(null)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkResult, setBulkResult] = useState<BulkResult | null>(null)
 
   const current = (): NotifySettings => ({
     webhook: { ...webhook, url: webhook.url.trim() },
@@ -76,6 +84,49 @@ export function NotifySection({ nodeName, initial, onSaved }: Props) {
     }
   }
 
+  // saveAll pushes the current notify config (webhook + email) to EVERY node —
+  // the local node and each peer, via the same per-node endpoint that proxies to
+  // peers. It reports per-node results since an unreachable/old peer can fail
+  // while others succeed.
+  const saveAll = async () => {
+    setBulkResult(null)
+    let nodes
+    try {
+      nodes = await fetchNodes()
+    } catch (err) {
+      setBulkResult({ total: 0, failed: [{ name: '(cluster)', error: err instanceof Error ? err.message : 'could not list nodes' }] })
+      return
+    }
+    if (nodes.length === 0) return
+    if (
+      !window.confirm(
+        `Apply these notification settings (webhook + email) to all ${nodes.length} node(s)? ` +
+          `This overwrites each node's existing notification config.`,
+      )
+    )
+      return
+
+    setBulkBusy(true)
+    const payload = current()
+    const results: { name: string; ok: boolean; error?: string }[] = await Promise.all(
+      nodes.map(async (n) => {
+        try {
+          await updateNotify(n.name, payload)
+          return { name: n.name, ok: true }
+        } catch (err) {
+          return { name: n.name, ok: false, error: err instanceof Error ? err.message : 'failed' }
+        }
+      }),
+    )
+    setBulkBusy(false)
+    setBulkResult({
+      total: results.length,
+      failed: results.filter((r) => !r.ok).map((r) => ({ name: r.name, error: r.error ?? 'failed' })),
+    })
+    // Keep the parent's cached copy for this node in sync with what we just sent.
+    onSaved(payload)
+  }
+
   return (
     <Section
       label="Notifications"
@@ -85,6 +136,9 @@ export function NotifySection({ nodeName, initial, onSaved }: Props) {
           <SaveButton feedback={feedback} onClick={save} />
           <Button variant="outlined" size="small" onClick={test} disabled={testing}>
             {testing ? 'Testing…' : 'Send test'}
+          </Button>
+          <Button variant="outlined" size="small" onClick={saveAll} disabled={bulkBusy}>
+            {bulkBusy ? 'Saving all…' : 'Save for all nodes'}
           </Button>
           <FeedbackText feedback={feedback} />
         </>
@@ -197,6 +251,32 @@ export function NotifySection({ nodeName, initial, onSaved }: Props) {
           placeholder="[heartd]"
         />
       </Stack>
+
+      {bulkResult && (
+        <Box
+          sx={{ mt: 2, p: 1.5, borderRadius: 1.5, border: `1px solid ${colors.border}`, bgcolor: colors.bg }}
+        >
+          <Typography variant="overline" sx={{ color: colors.textFaint }}>
+            Save for all nodes
+          </Typography>
+          {bulkResult.failed.length === 0 ? (
+            <Typography sx={{ fontSize: 13, mt: 0.5, color: colors.ok }}>
+              Saved to all {bulkResult.total} node{bulkResult.total === 1 ? '' : 's'}.
+            </Typography>
+          ) : (
+            <>
+              <Typography sx={{ fontSize: 13, mt: 0.5, color: colors.text }}>
+                Saved to {bulkResult.total - bulkResult.failed.length} of {bulkResult.total} nodes. Failed:
+              </Typography>
+              {bulkResult.failed.map((f) => (
+                <Typography key={f.name} sx={{ fontSize: 13, mt: 0.25, color: colors.error }}>
+                  {f.name}: {f.error}
+                </Typography>
+              ))}
+            </>
+          )}
+        </Box>
+      )}
 
       {(testResult || testError) && (
         <Box
