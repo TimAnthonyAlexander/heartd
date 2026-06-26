@@ -12,12 +12,14 @@
 #   2. Creates a dedicated, unprivileged `heartd` system user + group
 #   3. Creates /etc/heartd (config) and /var/lib/heartd (database)
 #   4. Writes /etc/heartd/heartd.yaml (only if absent — never clobbers yours)
-#   5. Installs and starts a hardened systemd unit bound to 127.0.0.1
+#   5. Installs and starts a hardened systemd unit bound to the address you pick
+#      (it asks: 127.0.0.1, 0.0.0.0, or a specific IP; default 127.0.0.1)
 #   6. Prints an nginx reverse-proxy block for you to add (does NOT touch nginx)
-#   7. Optionally adds an nginx firewall rule — but ONLY after asking
+#   7. Optionally adds a firewall rule — but ONLY after asking
 #
-# It does NOT configure nginx or TLS, and never opens port 9300 publicly:
-# heartd listens on localhost and is meant to sit behind your own reverse proxy.
+# It does NOT configure nginx or TLS for you. By default heartd listens on
+# localhost and is meant to sit behind your own reverse proxy; you may instead
+# bind it to a public IP (plain HTTP) when prompted or via --bind.
 #
 # Usage:
 #   sudo ./install.sh [options]
@@ -43,9 +45,11 @@
 #                     peer API, and prints how to add it on your HQ node.
 #   --secret SECRET   Shared secret for the peer link (headless mode). If omitted
 #                     in --headless, one is generated and printed.
-#   --bind HOST       Bind address override: 0.0.0.0 (reachable directly, plain
-#                     HTTP) or 127.0.0.1 (local; you front it with your own TLS).
-#                     Headless installs ask if this is not given.
+#   --bind HOST       Bind address override: 127.0.0.1 (local; front it with your
+#                     own TLS), 0.0.0.0 (all interfaces, plain HTTP), or a specific
+#                     IP. If not given, the installer asks interactively (both
+#                     dashboard and headless installs); piped/--yes runs use the
+#                     per-mode default (dashboard 127.0.0.1, headless 0.0.0.0).
 #   -h, --help        Show this help and exit.
 #
 # Headless agent one-liner (public box you just want HQ to watch):
@@ -158,12 +162,14 @@ while [ $# -gt 0 ]; do
 done
 
 # ----- prompt helper (defaults to NO; honours --yes; safe when non-interactive) -----
+# Reads from /dev/tty (not stdin) so prompts still work under `curl | bash`,
+# where stdin is the piped script. Falls back to "no" when no terminal exists.
 confirm() {
   local prompt="$1"
   if [ "$ASSUME_YES" = "yes" ]; then return 0; fi
-  if [ ! -t 0 ]; then return 1; fi # no TTY -> treat as "no"
+  if [ ! -r /dev/tty ]; then return 1; fi # no terminal -> treat as "no"
   local reply
-  read -r -p "$prompt [y/N] " reply || true
+  read -r -p "$prompt [y/N] " reply </dev/tty || true
   case "$reply" in [yY] | [yY][eE][sS]) return 0 ;; *) return 1 ;; esac
 }
 
@@ -263,29 +269,52 @@ if [ "$HEADLESS" = "yes" ] && [ -z "$SECRET" ]; then
   SECRET_GENERATED="yes"
 fi
 
-# Bind address. Dashboard nodes always bind localhost (behind a reverse proxy).
-# Headless agents choose: expose directly over plain HTTP (0.0.0.0), or bind
-# localhost and front it yourself with nginx/TLS. --bind overrides; otherwise we
-# ask interactively and default to direct/HTTP when piped (non-interactive).
+# Bind address. --bind overrides everything and is taken verbatim. Otherwise we
+# ask interactively (both dashboard and headless modes); when piped / --yes we
+# fall back to a per-mode default: dashboard → 127.0.0.1 (front it with your own
+# reverse proxy + TLS), headless → 0.0.0.0 (reached directly by your HQ).
+if [ "$HEADLESS" = "yes" ]; then
+  DEFAULT_BIND_HOST="0.0.0.0"
+else
+  DEFAULT_BIND_HOST="127.0.0.1"
+fi
+
+# ask_bind_host prompts for a bind address and echoes the chosen host. Accepts a
+# blank line (use the default), the shortcuts 1/2, or a literal address typed in.
+ask_bind_host() {
+  local default="$1" reply
+  c_blue "Which address should heartd bind to?" >&2
+  info "  1) 127.0.0.1  — localhost only; front it with your own reverse proxy + TLS (recommended)" >&2
+  info "  2) 0.0.0.0    — all interfaces; reachable directly over plain HTTP on every IP" >&2
+  info "  or type a specific IP on this host (e.g. ${PUBLIC_IP_HINT})" >&2
+  read -r -p "Bind address [default ${default}]: " reply </dev/tty || reply=""
+  case "$reply" in
+  "") echo "$default" ;;
+  1) echo "127.0.0.1" ;;
+  2) echo "0.0.0.0" ;;
+  *) echo "$reply" ;;
+  esac
+}
+
 if [ -n "$BIND_HOST_OVERRIDE" ]; then
   BIND_HOST="$BIND_HOST_OVERRIDE"
-elif [ "$HEADLESS" = "yes" ]; then
-  if [ -t 0 ] && [ "$ASSUME_YES" != "yes" ]; then
-    c_blue "How should this agent be reached by your HQ?"
-    info "  • direct  — bind 0.0.0.0, plain HTTP on IP:${PORT} (simplest, no certs)"
-    info "  • behind  — bind 127.0.0.1, you front it with your own nginx/Caddy + TLS (https)"
-    if confirm "Expose directly over plain HTTP? (No = bind 127.0.0.1 for your own TLS)"; then
-      BIND_HOST="0.0.0.0"
-    else
-      BIND_HOST="127.0.0.1"
-    fi
-  else
-    BIND_HOST="0.0.0.0" # non-interactive headless default: direct/HTTP (pass --bind to change)
-  fi
+elif [ "$ASSUME_YES" != "yes" ] && [ -r /dev/tty ]; then
+  # Read from /dev/tty (not stdin) so this still prompts under `curl | bash`,
+  # where stdin is the piped script rather than the terminal.
+  PUBLIC_IP_HINT="$(detect_ip)"
+  BIND_HOST="$(ask_bind_host "$DEFAULT_BIND_HOST")"
 else
-  BIND_HOST="127.0.0.1"
+  BIND_HOST="$DEFAULT_BIND_HOST" # non-interactive: pass --bind to change
 fi
 BIND="${BIND_HOST}:${PORT}"
+
+# Where to health-check after start. 0.0.0.0 includes loopback; a specific
+# public/private IP may not, so probe the bound host directly in that case.
+if [ "$BIND_HOST" = "0.0.0.0" ] || [ "$BIND_HOST" = "127.0.0.1" ]; then
+  HEALTH_HOST="127.0.0.1"
+else
+  HEALTH_HOST="$BIND_HOST"
+fi
 
 c_blue "heartd installer"
 info "binary:    $BINARY"
@@ -300,7 +329,11 @@ if [ "$HEADLESS" = "yes" ]; then
   fi
 else
   info "mode:      dashboard (behind your reverse proxy)"
-  info "bind:      ${BIND}  (localhost only)"
+  if [ "$BIND_HOST" = "127.0.0.1" ]; then
+    info "bind:      ${BIND}  (localhost only — front it with your own reverse proxy/TLS)"
+  else
+    info "bind:      ${BIND}  (reachable directly over plain HTTP — no TLS!)"
+  fi
 fi
 info "config:    $CONFIG_FILE"
 info "database:  ${DATA_DIR}/heartd.db"
@@ -442,18 +475,18 @@ if [ "$DO_START" = "yes" ]; then
   $SUDO systemctl enable --now heartd
   info "enabled and started heartd.service"
 
-  # Brief health check.
+  # Brief health check against the address we actually bound.
   if command -v curl >/dev/null 2>&1; then
     ok="no"
     for _ in 1 2 3 4 5; do
-      if curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
+      if curl -fsS "http://${HEALTH_HOST}:${PORT}/api/health" >/dev/null 2>&1; then
         ok="yes"
         break
       fi
       sleep 1
     done
     if [ "$ok" = "yes" ]; then
-      c_green "heartd is responding on http://127.0.0.1:${PORT}"
+      c_green "heartd is responding on http://${HEALTH_HOST}:${PORT}"
     else
       c_yellow "heartd did not answer /api/health yet — check: journalctl -u heartd -e"
     fi
@@ -532,9 +565,24 @@ fi
 # ----- 6. nginx instructions (printed, never applied) -----
 c_blue "6/6  Reverse proxy (manual step — nothing was changed)"
 NGINX_HOST="${DOMAIN:-heartd.example.com}"
+
+# If the dashboard was bound to a public/non-loopback address, it is reachable
+# directly over plain HTTP. Warn loudly and still recommend fronting with TLS.
+if [ "$BIND_HOST" != "127.0.0.1" ]; then
+  DASH_IP="$BIND_HOST"
+  [ "$DASH_IP" = "0.0.0.0" ] && DASH_IP="$(detect_ip)"
+  c_yellow "You bound the dashboard to ${BIND} — it is reachable directly at:"
+  info "  http://${DASH_IP}:${PORT}/"
+  c_yellow "This is PLAIN HTTP: login credentials and the session cookie are sent"
+  info "unencrypted. Fine on a trusted LAN/VPN; for anything internet-facing, bind"
+  info "127.0.0.1 instead and put nginx + TLS in front (see below). You must also"
+  info "open port ${PORT} in your firewall for it to be reachable."
+  echo
+fi
+
 cat <<NGINX
 
-heartd serves plain HTTP on 127.0.0.1:${PORT}. Put it behind your existing nginx
+heartd serves plain HTTP on ${BIND}. Put it behind your existing nginx
 and terminate TLS there. Add a server block like this:
 
   # /etc/nginx/sites-available/heartd
@@ -564,13 +612,24 @@ NGINX
 
 # ----- optional firewall step (asks first) -----
 if command -v ufw >/dev/null 2>&1 && $SUDO ufw status 2>/dev/null | grep -q "Status: active"; then
-  c_yellow "ufw is active. heartd itself needs NO open port (it's localhost-only)."
-  info "Public access goes through nginx on 80/443, which you may already allow."
-  if [ "$ALLOW_UFW" = "yes" ] || confirm "Allow nginx (80,443) through ufw now? ('Nginx Full')"; then
-    $SUDO ufw allow 'Nginx Full'
-    c_green "added ufw rule 'Nginx Full' (80,443). Port ${PORT} remains closed."
+  if [ "$BIND_HOST" != "127.0.0.1" ]; then
+    # Bound publicly: heartd is reached directly, so its own port must be open.
+    c_yellow "ufw is active and heartd is bound to ${BIND} (reachable directly)."
+    if [ "$ALLOW_UFW" = "yes" ] || confirm "Open port ${PORT}/tcp through ufw now?"; then
+      $SUDO ufw allow "${PORT}/tcp"
+      c_green "added ufw rule for ${PORT}/tcp."
+    else
+      info "left firewall unchanged. To open it later: sudo ufw allow ${PORT}/tcp"
+    fi
   else
-    info "left firewall unchanged. To allow nginx later: sudo ufw allow 'Nginx Full'"
+    c_yellow "ufw is active. heartd itself needs NO open port (it's localhost-only)."
+    info "Public access goes through nginx on 80/443, which you may already allow."
+    if [ "$ALLOW_UFW" = "yes" ] || confirm "Allow nginx (80,443) through ufw now? ('Nginx Full')"; then
+      $SUDO ufw allow 'Nginx Full'
+      c_green "added ufw rule 'Nginx Full' (80,443). Port ${PORT} remains closed."
+    else
+      info "left firewall unchanged. To allow nginx later: sudo ufw allow 'Nginx Full'"
+    fi
   fi
 fi
 
