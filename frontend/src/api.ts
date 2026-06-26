@@ -239,9 +239,30 @@ export interface GeneralSettings {
   metrics_interval_sec: number
   peer_poll_interval_sec: number
   retention_sec: number
-  cpu_threshold: number
-  mem_threshold: number
-  disk_threshold: number
+}
+
+export type AlertSource =
+  | 'cpu'
+  | 'mem'
+  | 'disk'
+  | 'check_status'
+  | 'check_latency'
+  | 'net_recv'
+  | 'net_sent'
+  | 'peer'
+  | 'nodata'
+
+export interface AlertRule {
+  id: number
+  name: string
+  enabled: boolean
+  source: AlertSource
+  entity: string
+  comparator: string
+  threshold: number
+  for_seconds: number
+  recover_grace_seconds: number
+  severity: 'warning' | 'critical'
 }
 
 export interface EmailNotify {
@@ -284,6 +305,7 @@ export interface AllSettings {
   general: GeneralSettings
   notify: NotifySettings
   checks: CheckConfig[]
+  alerts: AlertRule[]
 }
 
 // Settings are addressed per node. For the local node the backend edits its own
@@ -321,4 +343,16 @@ export function deleteCheck(nodeName: string, id: number): Promise<{ status: str
 
 export function testNotify(nodeName: string, n: NotifySettings): Promise<Record<string, string>> {
   return postJSON<Record<string, string>>(`${settingsBase(nodeName)}/notify/test`, n)
+}
+
+export function createAlert(nodeName: string, a: Omit<AlertRule, 'id'>): Promise<AlertRule> {
+  return postJSON<AlertRule>(`${settingsBase(nodeName)}/alerts`, a)
+}
+
+export function updateAlert(nodeName: string, a: AlertRule): Promise<{ status: string }> {
+  return putJSON<{ status: string }>(`${settingsBase(nodeName)}/alerts/${a.id}`, a)
+}
+
+export function deleteAlert(nodeName: string, id: number): Promise<{ status: string }> {
+  return delJSON<{ status: string }>(`${settingsBase(nodeName)}/alerts/${id}`)
 }

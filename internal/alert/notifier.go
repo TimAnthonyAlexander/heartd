@@ -19,14 +19,16 @@ const httpTimeout = sendTimeout
 
 // webhookPayload is the stable JSON shape POSTed to a webhook target.
 type webhookPayload struct {
-	Kind    Kind   `json:"kind"`
-	Node    string `json:"node"`
-	Subject string `json:"subject"`
-	Firing  bool   `json:"firing"`
-	Status  string `json:"status"`
-	Title   string `json:"title"`
-	Detail  string `json:"detail"`
-	Time    string `json:"time"`
+	Kind     Kind   `json:"kind"`
+	Node     string `json:"node"`
+	Entity   string `json:"entity,omitempty"`
+	Subject  string `json:"subject"`
+	Severity string `json:"severity,omitempty"`
+	Firing   bool   `json:"firing"`
+	Status   string `json:"status"`
+	Title    string `json:"title"`
+	Detail   string `json:"detail"`
+	Time     string `json:"time"`
 }
 
 // WebhookNotifier delivers alerts as an HTTP POST with a JSON body.
@@ -50,14 +52,16 @@ func (w *WebhookNotifier) Name() string { return "webhook" }
 // A non-2xx response is treated as a failure.
 func (w *WebhookNotifier) Send(ctx context.Context, a Alert) error {
 	payload := webhookPayload{
-		Kind:    a.Kind,
-		Node:    a.Node,
-		Subject: a.Subject,
-		Firing:  a.Firing,
-		Status:  a.Status(),
-		Title:   a.Title,
-		Detail:  a.Detail,
-		Time:    a.Time.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		Kind:     a.Kind,
+		Node:     a.Node,
+		Entity:   a.Entity,
+		Subject:  a.Subject,
+		Severity: a.Severity,
+		Firing:   a.Firing,
+		Status:   a.Status(),
+		Title:    a.Title,
+		Detail:   a.Detail,
+		Time:     a.Time.UTC().Format("2006-01-02T15:04:05Z07:00"),
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

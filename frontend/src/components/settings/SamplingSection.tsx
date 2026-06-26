@@ -42,9 +42,6 @@ export function SamplingSection({ nodeName, initial, onSaved }: Props) {
       metrics_interval_sec: Math.round(metrics),
       peer_poll_interval_sec: Math.round(peer),
       retention_sec: Math.round(days * 86400),
-      cpu_threshold: initial.cpu_threshold,
-      mem_threshold: initial.mem_threshold,
-      disk_threshold: initial.disk_threshold,
     }
 
     setFeedback('saving')

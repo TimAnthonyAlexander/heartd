@@ -2,7 +2,7 @@ import { Alert, Box, CircularProgress, Stack } from '@mui/material'
 import { useNodeSettings } from '../hooks/useNodeSettings'
 import { ChecksSection } from './settings/ChecksSection'
 import { NotifySection } from './settings/NotifySection'
-import { ThresholdsSection } from './settings/ThresholdsSection'
+import { AlertsSection } from './settings/AlertsSection'
 import { SamplingSection } from './settings/SamplingSection'
 
 export type ConfigTab = 'checks' | 'notifications' | 'alerts' | 'settings'
@@ -17,7 +17,8 @@ interface Props {
 // once (proxied to the node over the peer link when it isn't local) and renders
 // the section for the active tab, all writing back to the same node.
 export function NodeConfig({ nodeName, isLocal, tab }: Props) {
-  const { settings, loading, error, setGeneral, setNotify, setChecks } = useNodeSettings(nodeName)
+  const { settings, loading, error, setGeneral, setNotify, setChecks, setAlerts } =
+    useNodeSettings(nodeName)
 
   if (loading) {
     return (
@@ -45,7 +46,7 @@ export function NodeConfig({ nodeName, isLocal, tab }: Props) {
         <NotifySection nodeName={nodeName} initial={settings.notify} onSaved={setNotify} />
       )}
       {tab === 'alerts' && (
-        <ThresholdsSection nodeName={nodeName} initial={settings.general} onSaved={setGeneral} />
+        <AlertsSection nodeName={nodeName} alerts={settings.alerts} onChange={setAlerts} />
       )}
       {tab === 'settings' && (
         <SamplingSection nodeName={nodeName} initial={settings.general} onSaved={setGeneral} />

@@ -22,17 +22,21 @@ const (
 	KindCheck  Kind = "check"
 	KindPeer   Kind = "peer"
 	KindMetric Kind = "metric"
+	KindRule   Kind = "rule"
 )
 
 // Alert is a single notification about a state transition.
 type Alert struct {
-	Kind    Kind      // check | peer | metric
-	Node    string    // node the alert concerns
-	Subject string    // check name, peer name, or metric name ("CPU"/"Memory")
-	Firing  bool      // true = problem began; false = recovered
-	Title   string    // short human line, e.g. `Check "Google" is failing on web-01`
-	Detail  string    // extra context (the check detail, the metric value, etc.)
-	Time    time.Time // when the alert was generated (UTC)
+	Kind     Kind      // rule (or legacy check|peer|metric)
+	RuleID   int64     // the alert rule that produced this (0 if none)
+	Node     string    // node the alert concerns
+	Entity   string    // mount / check / peer the rule targets ("" if n/a)
+	Subject  string    // rule name (or legacy check/peer/metric name)
+	Severity string    // warning | critical ("" for legacy)
+	Firing   bool      // true = problem began; false = recovered
+	Title    string    // short human line
+	Detail   string    // extra context (the value vs threshold, the check detail, etc.)
+	Time     time.Time // when the alert was generated (UTC)
 }
 
 // Status returns "firing" when the alert represents a problem beginning, else

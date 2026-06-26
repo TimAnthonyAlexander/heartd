@@ -87,6 +87,9 @@ func New(cfg Config) http.Handler {
 	protect("POST /api/nodes/{name}/settings/checks", s.dispatchNode(s.handleCreateCheck, "/api/peer/settings/checks"))
 	protect("PUT /api/nodes/{name}/settings/checks/{id}", s.dispatchNode(s.handleUpdateCheck, "/api/peer/settings/checks"))
 	protect("DELETE /api/nodes/{name}/settings/checks/{id}", s.dispatchNode(s.handleDeleteCheck, "/api/peer/settings/checks"))
+	protect("POST /api/nodes/{name}/settings/alerts", s.dispatchNode(s.handleCreateAlert, "/api/peer/settings/alerts"))
+	protect("PUT /api/nodes/{name}/settings/alerts/{id}", s.dispatchNode(s.handleUpdateAlert, "/api/peer/settings/alerts"))
+	protect("DELETE /api/nodes/{name}/settings/alerts/{id}", s.dispatchNode(s.handleDeleteAlert, "/api/peer/settings/alerts"))
 
 	// Node-to-node endpoints, protected by the shared secret.
 	mux.Handle("POST /api/peer/announce", s.requireSecret(http.HandlerFunc(s.handlePeerAnnounce)))
@@ -104,6 +107,9 @@ func New(cfg Config) http.Handler {
 	mux.Handle("POST /api/peer/settings/checks", s.requireSecret(http.HandlerFunc(s.handleCreateCheck)))
 	mux.Handle("PUT /api/peer/settings/checks/{id}", s.requireSecret(http.HandlerFunc(s.handleUpdateCheck)))
 	mux.Handle("DELETE /api/peer/settings/checks/{id}", s.requireSecret(http.HandlerFunc(s.handleDeleteCheck)))
+	mux.Handle("POST /api/peer/settings/alerts", s.requireSecret(http.HandlerFunc(s.handleCreateAlert)))
+	mux.Handle("PUT /api/peer/settings/alerts/{id}", s.requireSecret(http.HandlerFunc(s.handleUpdateAlert)))
+	mux.Handle("DELETE /api/peer/settings/alerts/{id}", s.requireSecret(http.HandlerFunc(s.handleDeleteAlert)))
 
 	// Unknown API paths return JSON 404 rather than falling through to the
 	// SPA handler (which would serve index.html with a 200).

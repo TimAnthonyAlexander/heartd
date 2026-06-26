@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/timanthonyalexander/heartd/internal/alert"
 	"github.com/timanthonyalexander/heartd/internal/checks"
 	"github.com/timanthonyalexander/heartd/internal/config"
 	"github.com/timanthonyalexander/heartd/internal/settings"
@@ -25,20 +24,18 @@ type Scheduler struct {
 	db       *storage.DB
 	node     string
 	settings *settings.Service
-	engine   *alert.Engine // optional; nil when alerting is disabled
 
 	mu       sync.Mutex
 	lastRun  map[string]time.Time
 	inflight map[string]bool
 }
 
-// New builds a Scheduler. engine may be nil.
-func New(db *storage.DB, node string, set *settings.Service, engine *alert.Engine) *Scheduler {
+// New builds a Scheduler.
+func New(db *storage.DB, node string, set *settings.Service) *Scheduler {
 	return &Scheduler{
 		db:       db,
 		node:     node,
 		settings: set,
-		engine:   engine,
 		lastRun:  make(map[string]time.Time),
 		inflight: make(map[string]bool),
 	}
@@ -46,8 +43,6 @@ func New(db *storage.DB, node string, set *settings.Service, engine *alert.Engin
 
 // Run reconciles and dispatches due checks each tick until ctx is cancelled.
 func (s *Scheduler) Run(ctx context.Context) {
-	s.seedAlertState()
-
 	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()
 	for {
@@ -90,24 +85,8 @@ func (s *Scheduler) run(ctx context.Context, c settings.Check) {
 	s.evaluate(ctx, c)
 }
 
-// seedAlertState primes the alert engine with each check's last persisted status
-// so a restart does not re-alert an already-failing check.
-func (s *Scheduler) seedAlertState() {
-	if s.engine == nil {
-		return
-	}
-	stored, err := s.db.CheckStatuses(s.node)
-	if err != nil {
-		log.Printf("scheduler: seed alert state failed: %v", err)
-		return
-	}
-	for _, st := range stored {
-		s.engine.SeedCheck(s.node, st.Name, st.Status)
-	}
-}
-
-// evaluate runs one check, persists its result, and reports it to the alert
-// engine (which fires only on transitions).
+// evaluate runs one check and persists its result. Alerting is handled
+// separately by the alert Runner, which reads the persisted status.
 func (s *Scheduler) evaluate(ctx context.Context, c settings.Check) {
 	res := checks.Run(ctx, toConfigCheck(c))
 	status := storage.CheckStatus{
@@ -121,9 +100,6 @@ func (s *Scheduler) evaluate(ctx context.Context, c settings.Check) {
 	}
 	if err := s.db.UpsertCheckStatus(status); err != nil {
 		log.Printf("scheduler: persist check %q failed: %v", c.Name, err)
-	}
-	if s.engine != nil {
-		s.engine.ObserveCheck(s.node, c.Name, c.Type, string(res.Status), res.Detail)
 	}
 }
 

@@ -106,6 +106,19 @@ CREATE TABLE IF NOT EXISTS check_config (
     command      TEXT NOT NULL DEFAULT '',
     enabled      INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS alert_rule (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                  TEXT NOT NULL,
+    enabled               INTEGER NOT NULL DEFAULT 1,
+    source                TEXT NOT NULL,
+    entity                TEXT NOT NULL DEFAULT '',
+    comparator            TEXT NOT NULL DEFAULT '>=',
+    threshold             REAL NOT NULL DEFAULT 0,
+    for_seconds           INTEGER NOT NULL DEFAULT 0,
+    recover_grace_seconds INTEGER NOT NULL DEFAULT 0,
+    severity              TEXT NOT NULL DEFAULT 'warning',
+    created_at            INTEGER NOT NULL
+);
 `
 
 // Open opens (creating if needed) the SQLite database at path and ensures the

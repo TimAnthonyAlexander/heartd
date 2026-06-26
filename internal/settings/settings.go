@@ -17,32 +17,22 @@ import (
 )
 
 const (
-	keyInitialized = "initialized"
-	keyGeneral     = "general"
-	keyNotify      = "notify"
+	keyInitialized  = "initialized"
+	keyGeneral      = "general"
+	keyNotify       = "notify"
+	keyAlertsSeeded = "alerts_seeded"
 )
 
-// General holds the tunable sampling/threshold settings.
+// General holds the tunable sampling/retention settings. Alert thresholds moved
+// out of here into configurable alert rules (see AlertRule).
 type General struct {
 	MetricsInterval  time.Duration `json:"-"`
 	PeerPollInterval time.Duration `json:"-"`
 	Retention        time.Duration `json:"-"`
-	CPUThreshold     float64       `json:"cpu_threshold"`
-	MemThreshold     float64       `json:"mem_threshold"`
-	DiskThreshold    float64       `json:"disk_threshold"`
 	// Seconds fields are what actually serialize to JSON in the DB.
 	MetricsIntervalSec  int64 `json:"metrics_interval_sec"`
 	PeerPollIntervalSec int64 `json:"peer_poll_interval_sec"`
 	RetentionSec        int64 `json:"retention_sec"`
-}
-
-// Thresholds returns the alert thresholds as a config.Thresholds.
-func (g General) Thresholds() config.Thresholds {
-	return config.Thresholds{
-		CPUPercent:  g.CPUThreshold,
-		MemPercent:  g.MemThreshold,
-		DiskPercent: g.DiskThreshold,
-	}
 }
 
 // EmailNotify configures SMTP alerts.
@@ -93,6 +83,7 @@ type Service struct {
 	general General
 	notify  Notify
 	checks  []Check
+	alerts  []storage.AlertRule
 }
 
 // New builds a settings Service over the database.
@@ -113,7 +104,45 @@ func (s *Service) Load(cfg config.Config) error {
 			return err
 		}
 	}
+	// Seed the default alert rules once. This is gated separately from the main
+	// init flag so existing databases (initialized before alert rules existed)
+	// still get the defaults on upgrade, while a user who later deletes all rules
+	// won't have them resurrected on the next restart.
+	if err := s.seedAlertRulesOnce(cfg); err != nil {
+		return fmt.Errorf("seed alert rules: %w", err)
+	}
 	return s.reload()
+}
+
+// seedAlertRulesOnce installs the default alert rules the first time it runs
+// (guarded by keyAlertsSeeded), mirroring the legacy fixed thresholds plus
+// check-failing and peer-down alerts so behavior is preserved.
+func (s *Service) seedAlertRulesOnce(cfg config.Config) error {
+	if _, ok, err := s.db.GetSetting(keyAlertsSeeded); err != nil {
+		return err
+	} else if ok {
+		return nil
+	}
+
+	defaults := []storage.AlertRule{
+		{Name: "Service check failing", Enabled: true, Source: "check_status", Entity: "*", Severity: "critical"},
+		{Name: "Node unreachable", Enabled: true, Source: "peer", Entity: "*", Severity: "critical"},
+	}
+	if cfg.Thresholds.CPUPercent > 0 {
+		defaults = append(defaults, storage.AlertRule{Name: "High CPU usage", Enabled: true, Source: "cpu", Comparator: ">=", Threshold: cfg.Thresholds.CPUPercent, Severity: "critical"})
+	}
+	if cfg.Thresholds.MemPercent > 0 {
+		defaults = append(defaults, storage.AlertRule{Name: "High memory usage", Enabled: true, Source: "mem", Comparator: ">=", Threshold: cfg.Thresholds.MemPercent, Severity: "critical"})
+	}
+	if cfg.Thresholds.DiskPercent > 0 {
+		defaults = append(defaults, storage.AlertRule{Name: "Disk almost full", Enabled: true, Source: "disk", Entity: "*", Comparator: ">=", Threshold: cfg.Thresholds.DiskPercent, Severity: "critical"})
+	}
+	for _, r := range defaults {
+		if _, err := s.db.CreateAlertRule(normalizeAlertRule(r)); err != nil {
+			return err
+		}
+	}
+	return s.db.SetSetting(keyAlertsSeeded, "1")
 }
 
 func (s *Service) seed(cfg config.Config) error {
@@ -121,9 +150,6 @@ func (s *Service) seed(cfg config.Config) error {
 		MetricsIntervalSec:  int64(cfg.Server.MetricsInterval.Std().Seconds()),
 		PeerPollIntervalSec: int64(cfg.Server.PeerPollInterval.Std().Seconds()),
 		RetentionSec:        int64(cfg.Server.Retention.Std().Seconds()),
-		CPUThreshold:        cfg.Thresholds.CPUPercent,
-		MemThreshold:        cfg.Thresholds.MemPercent,
-		DiskThreshold:       cfg.Thresholds.DiskPercent,
 	}
 	if err := s.writeJSON(keyGeneral, g); err != nil {
 		return err
@@ -187,8 +213,13 @@ func (s *Service) reload() error {
 		return err
 	}
 
+	alerts, err := s.db.ListAlertRules()
+	if err != nil {
+		return err
+	}
+
 	s.mu.Lock()
-	s.general, s.notify, s.checks = g, n, checks
+	s.general, s.notify, s.checks, s.alerts = g, n, checks, alerts
 	s.mu.Unlock()
 	return nil
 }
@@ -203,6 +234,62 @@ func (s *Service) loadChecks() ([]Check, error) {
 		checks = append(checks, fromStorage(r))
 	}
 	return checks, nil
+}
+
+// AlertRules returns a copy of the current alert rule list.
+func (s *Service) AlertRules() []storage.AlertRule {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]storage.AlertRule, len(s.alerts))
+	copy(out, s.alerts)
+	return out
+}
+
+// CreateAlertRule validates and inserts a new rule, returning it with its ID.
+func (s *Service) CreateAlertRule(r storage.AlertRule) (storage.AlertRule, error) {
+	r = normalizeAlertRule(r)
+	if err := validateAlertRule(r); err != nil {
+		return storage.AlertRule{}, err
+	}
+	created, err := s.db.CreateAlertRule(r)
+	if err != nil {
+		return storage.AlertRule{}, err
+	}
+	if err := s.refreshAlertRules(); err != nil {
+		return storage.AlertRule{}, err
+	}
+	return created, nil
+}
+
+// UpdateAlertRule validates and updates an existing rule.
+func (s *Service) UpdateAlertRule(r storage.AlertRule) error {
+	r = normalizeAlertRule(r)
+	if err := validateAlertRule(r); err != nil {
+		return err
+	}
+	if err := s.db.UpdateAlertRule(r); err != nil {
+		return err
+	}
+	return s.refreshAlertRules()
+}
+
+// DeleteAlertRule removes a rule by ID.
+func (s *Service) DeleteAlertRule(id int64) error {
+	if err := s.db.DeleteAlertRule(id); err != nil {
+		return err
+	}
+	return s.refreshAlertRules()
+}
+
+func (s *Service) refreshAlertRules() error {
+	alerts, err := s.db.ListAlertRules()
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.alerts = alerts
+	s.mu.Unlock()
+	return nil
 }
 
 // General returns a copy of the current general settings.

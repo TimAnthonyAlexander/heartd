@@ -51,10 +51,41 @@ func checkToOutput(c settings.Check) checkInput {
 	}
 }
 
+// alertRuleInput is the JSON shape for a configurable alert rule.
+type alertRuleInput struct {
+	ID           int64   `json:"id"`
+	Name         string  `json:"name"`
+	Enabled      bool    `json:"enabled"`
+	Source       string  `json:"source"`
+	Entity       string  `json:"entity"`
+	Comparator   string  `json:"comparator"`
+	Threshold    float64 `json:"threshold"`
+	ForSec       int64   `json:"for_seconds"`
+	RecoverGrace int64   `json:"recover_grace_seconds"`
+	Severity     string  `json:"severity"`
+}
+
+func (a alertRuleInput) toStorage() storage.AlertRule {
+	return storage.AlertRule{
+		ID: a.ID, Name: a.Name, Enabled: a.Enabled, Source: a.Source, Entity: a.Entity,
+		Comparator: a.Comparator, Threshold: a.Threshold, ForSec: a.ForSec,
+		RecoverGrace: a.RecoverGrace, Severity: a.Severity,
+	}
+}
+
+func alertToOutput(a storage.AlertRule) alertRuleInput {
+	return alertRuleInput{
+		ID: a.ID, Name: a.Name, Enabled: a.Enabled, Source: a.Source, Entity: a.Entity,
+		Comparator: a.Comparator, Threshold: a.Threshold, ForSec: a.ForSec,
+		RecoverGrace: a.RecoverGrace, Severity: a.Severity,
+	}
+}
+
 type settingsResp struct {
 	General settings.General `json:"general"`
 	Notify  settings.Notify  `json:"notify"`
 	Checks  []checkInput     `json:"checks"`
+	Alerts  []alertRuleInput `json:"alerts"`
 }
 
 func (s *server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -62,11 +93,64 @@ func (s *server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		General: s.cfg.Settings.General(),
 		Notify:  s.cfg.Settings.Notify(),
 		Checks:  []checkInput{},
+		Alerts:  []alertRuleInput{},
 	}
 	for _, c := range s.cfg.Settings.Checks() {
 		resp.Checks = append(resp.Checks, checkToOutput(c))
 	}
+	for _, a := range s.cfg.Settings.AlertRules() {
+		resp.Alerts = append(resp.Alerts, alertToOutput(a))
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *server) handleCreateAlert(w http.ResponseWriter, r *http.Request) {
+	var in alertRuleInput
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	created, err := s.cfg.Settings.CreateAlertRule(in.toStorage())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, alertToOutput(created))
+}
+
+func (s *server) handleUpdateAlert(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	var in alertRuleInput
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	in.ID = id
+	if err := s.cfg.Settings.UpdateAlertRule(in.toStorage()); err != nil {
+		if errors.Is(err, storage.ErrAlertRuleNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "alert rule not found"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *server) handleDeleteAlert(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	if err := s.cfg.Settings.DeleteAlertRule(id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if s.cfg.Engine != nil {
+		s.cfg.Engine.Forget(id)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *server) handlePutGeneral(w http.ResponseWriter, r *http.Request) {

@@ -36,14 +36,23 @@ func TestLoadSeedsFromConfig(t *testing.T) {
 	}
 
 	g := s.General()
-	if g.CPUThreshold != 70 || g.DiskThreshold != 80 {
-		t.Errorf("thresholds not seeded: %+v", g)
-	}
 	if g.MetricsInterval != 30*time.Second {
 		t.Errorf("metrics interval = %v, want 30s", g.MetricsInterval)
 	}
 	if checks := s.Checks(); len(checks) != 1 || checks[0].Name != "Google" {
 		t.Errorf("checks not seeded: %+v", checks)
+	}
+	// The legacy thresholds seed into default alert rules (cpu/mem/disk) plus the
+	// always-on check-failing and peer-down rules.
+	rules := s.AlertRules()
+	var cpu *storage.AlertRule
+	for i := range rules {
+		if rules[i].Source == "cpu" {
+			cpu = &rules[i]
+		}
+	}
+	if cpu == nil || cpu.Threshold != 70 {
+		t.Errorf("cpu rule not seeded from threshold: %+v", rules)
 	}
 }
 
@@ -75,10 +84,12 @@ func TestSetGeneralValidation(t *testing.T) {
 	if err := s.SetGeneral(g); err == nil {
 		t.Error("expected error for zero metrics interval")
 	}
-	g = s.General()
-	g.CPUThreshold = 150 // invalid
-	if err := s.SetGeneral(g); err == nil {
-		t.Error("expected error for out-of-range threshold")
+
+	// Alert-rule validation: out-of-range percent threshold is rejected.
+	if _, err := s.CreateAlertRule(storage.AlertRule{
+		Name: "bad", Source: "cpu", Comparator: ">=", Threshold: 150, Severity: "warning",
+	}); err == nil {
+		t.Error("expected error for out-of-range cpu threshold")
 	}
 }
 

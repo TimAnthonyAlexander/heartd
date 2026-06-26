@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { AllSettings, CheckConfig, GeneralSettings, NotifySettings } from '../api'
+import type { AlertRule, AllSettings, CheckConfig, GeneralSettings, NotifySettings } from '../api'
 import { fetchSettings } from '../api'
 
 export interface NodeSettingsState {
@@ -10,6 +10,7 @@ export interface NodeSettingsState {
   setGeneral: (g: GeneralSettings) => void
   setNotify: (n: NotifySettings) => void
   setChecks: (c: CheckConfig[]) => void
+  setAlerts: (a: AlertRule[]) => void
 }
 
 // useNodeSettings loads the runtime config for one node. For the local node the
@@ -60,6 +61,10 @@ export function useNodeSettings(nodeName: string | null): NodeSettingsState {
     (checks: CheckConfig[]) => setSettings((p) => (p ? { ...p, checks } : p)),
     [],
   )
+  const setAlerts = useCallback(
+    (alerts: AlertRule[]) => setSettings((p) => (p ? { ...p, alerts } : p)),
+    [],
+  )
 
-  return { settings, loading, error, reload, setGeneral, setNotify, setChecks }
+  return { settings, loading, error, reload, setGeneral, setNotify, setChecks, setAlerts }
 }

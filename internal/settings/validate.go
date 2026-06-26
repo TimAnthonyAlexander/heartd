@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/timanthonyalexander/heartd/internal/storage"
 )
 
 // Valid check types.
@@ -26,11 +28,92 @@ func validateGeneral(g General) error {
 	if g.Retention <= 0 {
 		return fmt.Errorf("retention must be greater than 0")
 	}
-	for name, v := range map[string]float64{
-		"cpu threshold": g.CPUThreshold, "mem threshold": g.MemThreshold, "disk threshold": g.DiskThreshold,
-	} {
-		if v < 0 || v > 100 {
-			return fmt.Errorf("%s must be between 0 and 100", name)
+	return nil
+}
+
+// Alert rule sources.
+const (
+	SourceCPU          = "cpu"
+	SourceMem          = "mem"
+	SourceDisk         = "disk"
+	SourceCheckStatus  = "check_status"
+	SourceCheckLatency = "check_latency"
+	SourceNetRecv      = "net_recv"
+	SourceNetSent      = "net_sent"
+	SourcePeer         = "peer"
+	SourceNoData       = "nodata"
+)
+
+// numericSources need a comparator + threshold; statusSources are state-based.
+var numericSources = map[string]bool{
+	SourceCPU: true, SourceMem: true, SourceDisk: true, SourceCheckLatency: true,
+	SourceNetRecv: true, SourceNetSent: true, SourceNoData: true,
+}
+var percentSources = map[string]bool{SourceCPU: true, SourceMem: true, SourceDisk: true}
+
+// entitySources take an entity (mount/check/peer name, "*" = any).
+var entitySources = map[string]bool{
+	SourceDisk: true, SourceCheckStatus: true, SourceCheckLatency: true,
+	SourcePeer: true, SourceNoData: true,
+}
+
+var validComparators = map[string]bool{">=": true, ">": true, "<=": true, "<": true}
+
+// normalizeAlertRule trims/defaults a rule before validation or persistence.
+func normalizeAlertRule(r storage.AlertRule) storage.AlertRule {
+	r.Name = strings.TrimSpace(r.Name)
+	r.Source = strings.TrimSpace(strings.ToLower(r.Source))
+	r.Entity = strings.TrimSpace(r.Entity)
+	r.Severity = strings.TrimSpace(strings.ToLower(r.Severity))
+	r.Comparator = strings.TrimSpace(r.Comparator)
+
+	if r.Severity == "" {
+		r.Severity = "warning"
+	}
+	if numericSources[r.Source] {
+		if r.Comparator == "" {
+			r.Comparator = ">="
+		}
+	} else {
+		// Status sources have no numeric condition.
+		r.Comparator = ""
+		r.Threshold = 0
+	}
+	if entitySources[r.Source] {
+		if r.Entity == "" {
+			r.Entity = "*"
+		}
+	} else {
+		r.Entity = ""
+	}
+	if r.ForSec < 0 {
+		r.ForSec = 0
+	}
+	if r.RecoverGrace < 0 {
+		r.RecoverGrace = 0
+	}
+	return r
+}
+
+func validateAlertRule(r storage.AlertRule) error {
+	if r.Name == "" {
+		return fmt.Errorf("alert name is required")
+	}
+	if !numericSources[r.Source] && r.Source != SourceCheckStatus && r.Source != SourcePeer {
+		return fmt.Errorf("invalid alert source %q", r.Source)
+	}
+	if r.Severity != "warning" && r.Severity != "critical" {
+		return fmt.Errorf("severity must be warning or critical")
+	}
+	if numericSources[r.Source] {
+		if !validComparators[r.Comparator] {
+			return fmt.Errorf("comparator must be one of >=, >, <=, <")
+		}
+		if percentSources[r.Source] && (r.Threshold < 0 || r.Threshold > 100) {
+			return fmt.Errorf("threshold must be between 0 and 100 percent")
+		}
+		if r.Threshold < 0 {
+			return fmt.Errorf("threshold must not be negative")
 		}
 	}
 	return nil

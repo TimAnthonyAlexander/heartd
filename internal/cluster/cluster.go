@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/timanthonyalexander/heartd/internal/alert"
 	"github.com/timanthonyalexander/heartd/internal/settings"
 	"github.com/timanthonyalexander/heartd/internal/storage"
 )
@@ -75,29 +74,27 @@ type Poller struct {
 	advertiseURL string
 	settings     *settings.Service
 	client       *http.Client
-	engine       *alert.Engine // optional; nil when alerting is disabled
 }
 
 const fallbackPollInterval = 15 * time.Second
 
 // New builds a Poller. The peer list lives in storage (seeded once from config
-// on first run); engine may be nil.
-func New(db *storage.DB, selfName, advertiseURL string, set *settings.Service, engine *alert.Engine) *Poller {
+// on first run). Alerting on peer reachability is handled by the alert Runner,
+// which reads the persisted peer status.
+func New(db *storage.DB, selfName, advertiseURL string, set *settings.Service) *Poller {
 	return &Poller{
 		db:           db,
 		selfName:     selfName,
 		advertiseURL: advertiseURL,
 		settings:     set,
 		client:       &http.Client{Timeout: 8 * time.Second},
-		engine:       engine,
 	}
 }
 
-// Run primes alert state, announces this node to its peers, then polls all peers
-// once immediately and once per current interval until ctx is cancelled. The
-// peer list is re-read from storage each cycle.
+// Run announces this node to its peers, then polls all peers once immediately and
+// once per current interval until ctx is cancelled. The peer list is re-read from
+// storage each cycle.
 func (p *Poller) Run(ctx context.Context) {
-	p.seedAlertState()
 	p.announceAll(ctx)
 
 	for {
@@ -123,17 +120,6 @@ func (p *Poller) peers() []storage.Peer {
 		return nil
 	}
 	return peers
-}
-
-// seedAlertState primes the alert engine with each peer's last persisted status
-// so a restart does not re-alert an already-down peer.
-func (p *Poller) seedAlertState() {
-	if p.engine == nil {
-		return
-	}
-	for _, peer := range p.peers() {
-		p.engine.SeedPeer(peer.Name, peer.Status)
-	}
 }
 
 // announceAll tells each known peer about this node (best-effort).
@@ -178,9 +164,6 @@ func (p *Poller) pollPeer(ctx context.Context, peer storage.Peer) {
 	if err != nil {
 		// Preserve last-seen (zero time) and record the error as "down".
 		_ = p.db.SetPeerStatus(peer.Name, "down", time.Time{}, err.Error())
-		if p.engine != nil {
-			p.engine.ObservePeer(peer.Name, "down")
-		}
 		return
 	}
 
@@ -223,9 +206,6 @@ func (p *Poller) pollPeer(ctx context.Context, peer storage.Peer) {
 	p.storePeerNet(ctx, peer)
 
 	_ = p.db.SetPeerStatus(peer.Name, "ok", time.Now().UTC(), "")
-	if p.engine != nil {
-		p.engine.ObservePeer(peer.Name, "ok")
-	}
 }
 
 // storePeerDisk fetches a peer's disk usage and records it under the peer's name.

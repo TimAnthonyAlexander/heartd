@@ -21,8 +21,7 @@ func testDB(t *testing.T) *storage.DB {
 	return db
 }
 
-const validGeneral = `{"cpu_threshold":88,"mem_threshold":90,"disk_threshold":91,` +
-	`"metrics_interval_sec":10,"peer_poll_interval_sec":15,"retention_sec":86400}`
+const validGeneral = `{"metrics_interval_sec":11,"peer_poll_interval_sec":15,"retention_sec":86400}`
 
 // localServer builds a bare *server for a node, without the auth wall, so tests
 // can call dispatch handlers directly.
@@ -49,8 +48,8 @@ func TestDispatchLocalWritesLocally(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if got := set.General().CPUThreshold; got != 88 {
-		t.Fatalf("local CPU threshold = %v, want 88", got)
+	if got := set.General().MetricsIntervalSec; got != 11 {
+		t.Fatalf("local metrics interval = %v, want 11", got)
 	}
 }
 
@@ -86,11 +85,11 @@ func TestDispatchProxiesToPeer(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if got := setB.General().CPUThreshold; got != 88 {
-		t.Fatalf("peer B CPU threshold = %v, want 88 (proxy did not land)", got)
+	if got := setB.General().MetricsIntervalSec; got != 11 {
+		t.Fatalf("peer B metrics interval = %v, want 11 (proxy did not land)", got)
 	}
-	if got := setA.General().CPUThreshold; got == 88 {
-		t.Fatalf("local A CPU threshold = %v, edit leaked to the wrong node", got)
+	if got := setA.General().MetricsIntervalSec; got == 11 {
+		t.Fatalf("local A metrics interval = %v, edit leaked to the wrong node", got)
 	}
 }
 

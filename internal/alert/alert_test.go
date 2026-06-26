@@ -71,186 +71,96 @@ func stableCount(t *testing.T, f *fakeNotifier, n int) {
 	}
 }
 
-func newTestEngine(t *testing.T) (*Engine, *fakeNotifier) {
-	t.Helper()
+func newTestEngine() (*Engine, *fakeNotifier) {
 	f := &fakeNotifier{}
-	d := NewDispatcher(f)
-	th := config.Thresholds{CPUPercent: 90, MemPercent: 80, DiskPercent: 90}
-	return NewEngine(d, func() config.Thresholds { return th }), f
+	return NewEngine(NewDispatcher(f)), f
 }
 
-func TestObserveCheckTransitions(t *testing.T) {
-	e, f := newTestEngine(t)
+var t0 = time.Unix(1_000_000, 0).UTC()
 
-	// ok -> failing fires one firing alert.
-	e.ObserveCheck("web-01", "Google", "http", statusOK, "")
-	stableCount(t, f, 0) // ok with no prior (unknown->ok) fires nothing
+func TestObserveFiresOnTransition(t *testing.T) {
+	e, f := newTestEngine()
+	r := RuleView{ID: 1, Name: "CPU high", Severity: "critical"}
 
-	e.ObserveCheck("web-01", "Google", "http", statusFailing, "HTTP 500")
-	waitFor(t, f, 1)
-	got := f.snapshot()[0]
-	if !got.Firing {
-		t.Errorf("expected firing alert, got recovered")
-	}
-	if got.Title != `Check "Google" is failing on web-01` {
-		t.Errorf("unexpected title: %q", got.Title)
-	}
-	if got.Detail != "HTTP 500" {
-		t.Errorf("unexpected detail: %q", got.Detail)
-	}
-	if got.Kind != KindCheck || got.Node != "web-01" || got.Subject != "Google" {
-		t.Errorf("unexpected envelope: %+v", got)
-	}
-
-	// failing -> failing fires NOTHING (dedup).
-	e.ObserveCheck("web-01", "Google", "http", statusFailing, "HTTP 503")
-	stableCount(t, f, 1)
-
-	// failing -> ok fires one recovered alert.
-	e.ObserveCheck("web-01", "Google", "http", statusOK, "HTTP 200")
-	waitFor(t, f, 2)
-	rec := f.snapshot()[1]
-	if rec.Firing {
-		t.Errorf("expected recovered alert, got firing")
-	}
-	if rec.Title != `Check "Google" recovered on web-01` {
-		t.Errorf("unexpected recovery title: %q", rec.Title)
-	}
-}
-
-func TestObserveCheckUnknownToOK(t *testing.T) {
-	e, f := newTestEngine(t)
-	// No prior state: unknown -> ok must NOT fire.
-	e.ObserveCheck("n1", "c1", "tcp", statusOK, "")
-	stableCount(t, f, 0)
-}
-
-func TestSeedCheckPreventsReAlert(t *testing.T) {
-	e, f := newTestEngine(t)
-	// Restart scenario: seed as failing, then observe the same failing status.
-	e.SeedCheck("web-01", "Google", statusFailing)
-	e.ObserveCheck("web-01", "Google", "http", statusFailing, "still down")
+	// Not met: nothing.
+	e.Observe(r, "web-01", "", "below", false, false, t0)
 	stableCount(t, f, 0)
 
-	// But a transition to ok after seed still fires recovery.
-	e.ObserveCheck("web-01", "Google", "http", statusOK, "")
-	waitFor(t, f, 1)
-	if f.snapshot()[0].Firing {
-		t.Errorf("expected recovery after seeded-failing -> ok")
-	}
-}
-
-func TestObservePeerTransitions(t *testing.T) {
-	e, f := newTestEngine(t)
-
-	// unknown -> ok: nothing.
-	e.ObservePeer("peer-a", statusOK)
-	stableCount(t, f, 0)
-
-	// ok -> down: fires.
-	e.ObservePeer("peer-a", statusDown)
+	// Met: one firing alert with severity + envelope.
+	e.Observe(r, "web-01", "", "CPU 95% >= 90%", true, false, t0.Add(time.Second))
 	waitFor(t, f, 1)
 	a := f.snapshot()[0]
-	if !a.Firing || a.Title != "Node peer-a is unreachable" || a.Kind != KindPeer {
-		t.Errorf("unexpected down alert: %+v", a)
+	if !a.Firing || a.Severity != "critical" || a.RuleID != 1 || a.Node != "web-01" || a.Kind != KindRule {
+		t.Fatalf("unexpected firing alert: %+v", a)
+	}
+	if !strings.Contains(a.Title, "CPU high") || a.Detail != "CPU 95% >= 90%" {
+		t.Fatalf("unexpected title/detail: %+v", a)
 	}
 
-	// down -> down: nothing.
-	e.ObservePeer("peer-a", statusDown)
+	// Still met: dedup, nothing new.
+	e.Observe(r, "web-01", "", "CPU 96% >= 90%", true, false, t0.Add(2*time.Second))
 	stableCount(t, f, 1)
 
-	// down -> ok: recovered.
-	e.ObservePeer("peer-a", statusOK)
-	waitFor(t, f, 2)
-	r := f.snapshot()[1]
-	if r.Firing || r.Title != "Node peer-a recovered" {
-		t.Errorf("unexpected recovery alert: %+v", r)
-	}
-}
-
-func TestSeedPeerPreventsReAlert(t *testing.T) {
-	e, f := newTestEngine(t)
-	e.SeedPeer("peer-b", statusDown)
-	e.ObservePeer("peer-b", statusDown)
-	stableCount(t, f, 0)
-}
-
-func TestObserveMetricTransitions(t *testing.T) {
-	e, f := newTestEngine(t) // CPU threshold 90, Mem 80
-
-	// below -> below: nothing.
-	e.ObserveMetric("web-01", 10, 10, 10)
-	stableCount(t, f, 0)
-
-	// below -> above (CPU): fires once.
-	e.ObserveMetric("web-01", 95, 10, 10)
-	waitFor(t, f, 1)
-	a := f.snapshot()[0]
-	if !a.Firing || a.Subject != "CPU" || a.Kind != KindMetric {
-		t.Errorf("unexpected cpu alert: %+v", a)
-	}
-	if !strings.Contains(a.Title, "CPU on web-01 is high") {
-		t.Errorf("unexpected cpu title: %q", a.Title)
-	}
-
-	// above -> above: nothing.
-	e.ObserveMetric("web-01", 96, 10, 10)
-	stableCount(t, f, 1)
-
-	// above -> below: recovered.
-	e.ObserveMetric("web-01", 50, 10, 10)
-	waitFor(t, f, 2)
-	r := f.snapshot()[1]
-	if r.Firing || !strings.Contains(r.Title, "CPU on web-01 recovered") {
-		t.Errorf("unexpected cpu recovery: %+v", r)
-	}
-}
-
-func TestObserveMetricThresholdDisabled(t *testing.T) {
-	f := &fakeNotifier{}
-	d := NewDispatcher(f)
-	// CPU disabled (0), Mem enabled at 80.
-	e := NewEngine(d, func() config.Thresholds { return config.Thresholds{CPUPercent: 0, MemPercent: 80} })
-
-	// Huge CPU must never fire because threshold <= 0.
-	e.ObserveMetric("web-01", 100, 10, 10)
-	stableCount(t, f, 0)
-
-	// Mem crossing still fires.
-	e.ObserveMetric("web-01", 100, 95, 10)
-	waitFor(t, f, 1)
-	if f.snapshot()[0].Subject != "Memory" {
-		t.Errorf("expected only a Memory alert, got %+v", f.snapshot())
-	}
-}
-
-func TestObserveMetricDiskTransitions(t *testing.T) {
-	f := &fakeNotifier{}
-	d := NewDispatcher(f)
-	e := NewEngine(d, func() config.Thresholds { return config.Thresholds{CPUPercent: 90, MemPercent: 90, DiskPercent: 90} })
-
-	// Disk below threshold: nothing (CPU/mem also below).
-	e.ObserveMetric("web-01", 10, 10, 80)
-	stableCount(t, f, 0)
-
-	// Disk crosses above: one firing alert about Disk.
-	e.ObserveMetric("web-01", 10, 10, 95)
-	waitFor(t, f, 1)
-	a := f.snapshot()[0]
-	if !a.Firing || a.Subject != "Disk" || a.Kind != KindMetric {
-		t.Errorf("unexpected disk alert: %+v", a)
-	}
-
-	// Still above: dedup, nothing new.
-	e.ObserveMetric("web-01", 10, 10, 97)
-	stableCount(t, f, 1)
-
-	// Back below: recovery.
-	e.ObserveMetric("web-01", 10, 10, 40)
+	// Cleared: one recovery.
+	e.Observe(r, "web-01", "", "CPU 40% >= 90%", false, false, t0.Add(3*time.Second))
 	waitFor(t, f, 2)
 	if f.snapshot()[1].Firing {
-		t.Errorf("expected disk recovery, got %+v", f.snapshot()[1])
+		t.Fatalf("expected recovery, got firing")
 	}
+}
+
+func TestForSecGatesFiring(t *testing.T) {
+	e, f := newTestEngine()
+	r := RuleView{ID: 2, Name: "Sustained", Severity: "warning", ForSec: 10}
+
+	e.Observe(r, "n", "", "d", true, false, t0) // breach starts, not elapsed
+	stableCount(t, f, 0)
+	e.Observe(r, "n", "", "d", true, false, t0.Add(5*time.Second))
+	stableCount(t, f, 0)
+	e.Observe(r, "n", "", "d", true, false, t0.Add(10*time.Second)) // elapsed
+	waitFor(t, f, 1)
+}
+
+func TestSeedDoesNotDispatch(t *testing.T) {
+	e, f := newTestEngine()
+	r := RuleView{ID: 3, Name: "x", Severity: "critical"}
+
+	// Seed as already-breaching: primes firing baseline, dispatches nothing.
+	e.Observe(r, "n", "", "d", true, true, t0)
+	e.Observe(r, "n", "", "d", true, false, t0.Add(time.Second))
+	stableCount(t, f, 0)
+
+	// A clear after a seeded-firing baseline still recovers.
+	e.Observe(r, "n", "", "d", false, false, t0.Add(2*time.Second))
+	waitFor(t, f, 1)
+	if f.snapshot()[0].Firing {
+		t.Fatalf("expected recovery after seeded-firing -> clear")
+	}
+}
+
+func TestRecoverGraceDelaysRecovery(t *testing.T) {
+	e, f := newTestEngine()
+	r := RuleView{ID: 4, Name: "x", Severity: "warning", RecoverGrace: 10}
+
+	e.Observe(r, "n", "", "d", true, false, t0)
+	waitFor(t, f, 1)
+	e.Observe(r, "n", "", "d", false, false, t0.Add(time.Second)) // grace not elapsed
+	stableCount(t, f, 1)
+	e.Observe(r, "n", "", "d", false, false, t0.Add(11*time.Second)) // grace elapsed
+	waitFor(t, f, 2)
+}
+
+func TestForgetResetsState(t *testing.T) {
+	e, f := newTestEngine()
+	r := RuleView{ID: 5, Name: "x", Severity: "critical"}
+
+	e.Observe(r, "n", "", "d", true, false, t0)
+	waitFor(t, f, 1)
+	e.Forget(5)
+	// After forget the prior firing state is gone, so a met condition is a fresh
+	// transition and fires again.
+	e.Observe(r, "n", "", "d", true, false, t0.Add(time.Second))
+	waitFor(t, f, 2)
 }
 
 func TestWebhookNotifierSendsJSON(t *testing.T) {
@@ -270,13 +180,14 @@ func TestWebhookNotifierSendsJSON(t *testing.T) {
 
 	n := NewWebhookNotifier(config.WebhookNotify{URL: srv.URL})
 	a := Alert{
-		Kind:    KindCheck,
-		Node:    "web-01",
-		Subject: "Google",
-		Firing:  true,
-		Title:   `Check "Google" is failing on web-01`,
-		Detail:  "HTTP 500",
-		Time:    time.Date(2026, 6, 25, 19, 0, 0, 0, time.UTC),
+		Kind:     KindRule,
+		Node:     "web-01",
+		Subject:  "High CPU",
+		Severity: "critical",
+		Firing:   true,
+		Title:    "High CPU — web-01",
+		Detail:   "CPU 95% >= 90%",
+		Time:     time.Date(2026, 6, 25, 19, 0, 0, 0, time.UTC),
 	}
 	if err := n.Send(context.Background(), a); err != nil {
 		t.Fatalf("Send returned error: %v", err)
@@ -284,14 +195,14 @@ func TestWebhookNotifierSendsJSON(t *testing.T) {
 
 	select {
 	case r := <-got:
-		if r.body.Kind != KindCheck || r.body.Node != "web-01" || r.body.Subject != "Google" {
+		if r.body.Kind != KindRule || r.body.Node != "web-01" || r.body.Subject != "High CPU" {
 			t.Errorf("unexpected payload identity: %+v", r.body)
+		}
+		if r.body.Severity != "critical" {
+			t.Errorf("expected severity critical, got %q", r.body.Severity)
 		}
 		if !r.body.Firing || r.body.Status != "firing" {
 			t.Errorf("expected firing/status=firing, got firing=%v status=%q", r.body.Firing, r.body.Status)
-		}
-		if r.body.Title != a.Title {
-			t.Errorf("unexpected title: %q", r.body.Title)
 		}
 		if r.body.Time != "2026-06-25T19:00:00Z" {
 			t.Errorf("unexpected time: %q", r.body.Time)
@@ -347,8 +258,8 @@ func TestBuildEmailMessage(t *testing.T) {
 		SubjectPrefix: "[heartd]",
 	}
 	a := Alert{
-		Title:  `Check "Google" is failing on web-01`,
-		Detail: "HTTP 500 in 45ms",
+		Title:  "High CPU — web-01",
+		Detail: "CPU 95% >= 90%",
 		Time:   time.Date(2026, 6, 25, 19, 0, 0, 0, time.UTC),
 	}
 	msg := string(buildEmailMessage(cfg, a))
@@ -356,9 +267,9 @@ func TestBuildEmailMessage(t *testing.T) {
 	for _, want := range []string{
 		"From: heartd@example.com",
 		"To: ops@example.com, oncall@example.com",
-		`Subject: [heartd] Check "Google" is failing on web-01`,
-		`Check "Google" is failing on web-01`,
-		"HTTP 500 in 45ms",
+		"Subject: [heartd] High CPU — web-01",
+		"High CPU — web-01",
+		"CPU 95% >= 90%",
 		"Time: 2026-06-25T19:00:00Z",
 	} {
 		if !strings.Contains(msg, want) {
@@ -391,37 +302,28 @@ func TestDispatcherEmpty(t *testing.T) {
 // TestConcurrentObserveNoDeadlock fires many overlapping observations from
 // multiple goroutines. Run with -race to detect data races.
 func TestConcurrentObserveNoDeadlock(t *testing.T) {
-	e, f := newTestEngine(t)
+	e, f := newTestEngine()
 
 	var wg sync.WaitGroup
 	for g := 0; g < 16; g++ {
 		wg.Add(1)
 		go func(g int) {
 			defer wg.Done()
-			name := "check"
-			node := "node"
+			r := RuleView{ID: int64(g), Name: "r", Severity: "warning"}
+			base := time.Unix(2_000_000, 0).UTC()
 			for i := 0; i < 200; i++ {
-				status := statusOK
-				if i%2 == 0 {
-					status = statusFailing
-				}
-				e.ObserveCheck(node, name, "http", status, "d")
-				e.ObservePeer("peer", status)
-				e.ObserveMetric(node, float64(i%100), float64(i%100), float64(i%100))
+				e.Observe(r, "node", "", "d", i%2 == 0, false, base.Add(time.Duration(i)*time.Second))
 			}
 		}(g)
 	}
 	wg.Wait()
 
-	// Drain any in-flight async dispatches; just assert we didn't deadlock and
-	// the engine remains usable.
 	time.Sleep(50 * time.Millisecond)
-	_ = f.count()
+	before := f.count()
 
 	// A final clean transition should still work (engine not deadlocked).
-	e.SeedCheck("node", "check", statusOK)
-	before := f.count()
-	e.ObserveCheck("node", "check", "http", statusFailing, "final")
+	r := RuleView{ID: 99, Name: "r", Severity: "warning"}
+	e.Observe(r, "node", "", "d", true, false, time.Unix(5_000_000, 0).UTC())
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		if f.count() > before {

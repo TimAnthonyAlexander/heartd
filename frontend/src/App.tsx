@@ -99,12 +99,12 @@ export default function App({ username, onLogout }: AppProps) {
         />
 
         <Box sx={{ px: { xs: 2, md: 4 }, pt: 2.5, pb: 0.5 }}>
-          <Box sx={{ maxWidth: 1280, mx: 'auto' }}>
-            <SegmentedTabs items={TABS} value={tab} onChange={setTab} />
-          </Box>
+          <SegmentedTabs items={TABS} value={tab} onChange={setTab} />
         </Box>
 
-        <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 1280, mx: 'auto' }}>
+        {/* Left-aligned: the dashboard spreads wide for 4 panels per row; the
+            config tabs stay at a readable form width. Neither is centered. */}
+        <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: tab === 'dashboard' ? 1760 : 820 }}>
           {tab === 'dashboard' ? (
             <>
               {data.unreachable && (
@@ -127,7 +127,7 @@ export default function App({ username, onLogout }: AppProps) {
               <Box
                 sx={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
                   gap: 2.5,
                   mb: 4,
                 }}

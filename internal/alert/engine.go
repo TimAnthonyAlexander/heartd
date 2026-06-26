@@ -5,219 +5,166 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/timanthonyalexander/heartd/internal/config"
 )
 
-// Status values used for checks and peers.
+// Alert levels. A rule is either ok or firing at its configured severity.
 const (
-	statusUnknown = "unknown"
-	statusOK      = "ok"
-	statusFailing = "failing"
-	statusDown    = "down"
+	levelOK = "ok"
 )
+
+// RuleView is the slice of an alert rule the Engine needs to run its state
+// machine. The runner builds it from the persisted rule so the Engine stays
+// decoupled from storage.
+type RuleView struct {
+	ID           int64
+	Name         string
+	Severity     string // warning | critical
+	ForSec       int64  // sustained duration before firing
+	RecoverGrace int64  // keep-firing-for after recovery (anti-flap)
+}
+
+// ruleState is the remembered state for one (rule, node, entity) triple.
+type ruleState struct {
+	level       string    // "ok" | severity
+	breachSince time.Time // when the condition first became true; zero if not breaching
+	recoveredAt time.Time // when it first cleared while firing; drives RecoverGrace
+}
 
 // Engine is the deduplication brain. It records the last known state of every
-// observed entity and dispatches an alert ONLY when an observation differs from
-// the prior state (edge-triggered). It is safe for concurrent use.
+// observed (rule, node, entity) and dispatches an alert only on a transition
+// (edge-triggered), honouring each rule's sustained-duration and recovery-grace
+// timers. It is safe for concurrent use.
 type Engine struct {
 	dispatcher dispatcher
-	thresholds func() config.Thresholds
 
-	mu         sync.Mutex
-	checkState map[string]string // node|name  -> ok|failing|unknown
-	peerState  map[string]string // name       -> ok|down|unknown
-	metricOver map[string]bool   // node|cpu, node|mem -> over threshold?
+	mu    sync.Mutex
+	state map[string]ruleState
 }
 
-// NewEngine builds an Engine that dispatches via d, reading thresholds fresh from
-// the provider on each metric evaluation (so runtime-edited thresholds apply
-// immediately).
-func NewEngine(d *Dispatcher, thresholds func() config.Thresholds) *Engine {
-	return &Engine{
-		dispatcher: d,
-		thresholds: thresholds,
-		checkState: make(map[string]string),
-		peerState:  make(map[string]string),
-		metricOver: make(map[string]bool),
+// NewEngine builds an Engine that dispatches via d.
+func NewEngine(d *Dispatcher) *Engine {
+	return &Engine{dispatcher: d, state: make(map[string]ruleState)}
+}
+
+func ruleKey(ruleID int64, node, entity string) string {
+	return fmt.Sprintf("%d|%s|%s", ruleID, node, entity)
+}
+
+// Observe records the current truth of a rule for one (node, entity) and
+// dispatches an alert only when the firing/recovered state actually changes,
+// gated by the rule's ForSec (must hold continuously before firing) and
+// RecoverGrace (must stay clear before recovering).
+//
+// When seed is true the Engine only primes baseline state and never dispatches —
+// used at startup so an already-breaching rule does not re-alert on restart.
+func (e *Engine) Observe(rule RuleView, node, entity, detail string, conditionMet, seed bool, now time.Time) {
+	key := ruleKey(rule.ID, node, entity)
+	forDur := time.Duration(rule.ForSec) * time.Second
+	graceDur := time.Duration(rule.RecoverGrace) * time.Second
+	severity := rule.Severity
+	if severity == "" {
+		severity = "warning"
 	}
-}
 
-func checkKey(node, name string) string { return node + "|" + name }
-
-// SeedCheck sets the baseline state for a check WITHOUT firing an alert. Called
-// at startup from the DB so a restart does not re-alert an already-failing
-// check.
-func (e *Engine) SeedCheck(node, name, status string) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.checkState[checkKey(node, name)] = status
-}
+	st := e.state[key]
+	if st.level == "" {
+		st.level = levelOK // an unseen entity starts from the ok baseline
+	}
 
-// SeedPeer sets the baseline state for a peer WITHOUT firing an alert.
-func (e *Engine) SeedPeer(name, status string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.peerState[name] = status
-}
+	var toFire *Alert
 
-// ForgetNode discards all remembered state for a node — its peer status, every
-// check keyed to it, and its metric-threshold flags. Called when a node is
-// removed so a later re-add starts from a clean baseline rather than inheriting
-// stale state (which could suppress or spuriously fire an alert).
-func (e *Engine) ForgetNode(name string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	delete(e.peerState, name)
-	prefix := name + "|"
-	for k := range e.checkState {
-		if strings.HasPrefix(k, prefix) {
-			delete(e.checkState, k)
+	if seed {
+		// Prime steady-state without dispatching.
+		if conditionMet {
+			st.level = severity
+			st.breachSince = now.Add(-forDur)
+			st.recoveredAt = time.Time{}
+		} else {
+			st = ruleState{level: levelOK}
 		}
-	}
-	for k := range e.metricOver {
-		if strings.HasPrefix(k, prefix) {
-			delete(e.metricOver, k)
-		}
-	}
-}
-
-// ObserveCheck compares a check's new status to its last known status and
-// dispatches an alert only on a transition. Safe to call concurrently.
-func (e *Engine) ObserveCheck(node, name, checkType, status, detail string) {
-	key := checkKey(node, name)
-
-	e.mu.Lock()
-	prior, ok := e.checkState[key]
-	if !ok {
-		prior = statusUnknown
-	}
-	e.checkState[key] = status
-
-	if status == prior {
+		e.state[key] = st
 		e.mu.Unlock()
 		return
 	}
 
-	var alert *Alert
-	switch {
-	case status == statusFailing:
-		alert = &Alert{
-			Firing: true,
-			Title:  fmt.Sprintf("Check %q is failing on %s", name, node),
-			Detail: detail,
+	if conditionMet {
+		st.recoveredAt = time.Time{}
+		if st.breachSince.IsZero() {
+			st.breachSince = now
 		}
-	case status == statusOK && prior == statusFailing:
-		alert = &Alert{
-			Firing: false,
-			Title:  fmt.Sprintf("Check %q recovered on %s", name, node),
-			Detail: detail,
-		}
-	}
-	e.mu.Unlock()
-
-	if alert == nil {
-		return
-	}
-	alert.Kind = KindCheck
-	alert.Node = node
-	alert.Subject = name
-	e.fire(*alert)
-}
-
-// ObservePeer compares a peer's new status to its last known status and
-// dispatches an alert only on a transition. Safe to call concurrently.
-func (e *Engine) ObservePeer(name, status string) {
-	e.mu.Lock()
-	prior, ok := e.peerState[name]
-	if !ok {
-		prior = statusUnknown
-	}
-	e.peerState[name] = status
-
-	if status == prior {
-		e.mu.Unlock()
-		return
-	}
-
-	var alert *Alert
-	switch {
-	case status == statusDown:
-		alert = &Alert{
-			Firing: true,
-			Title:  fmt.Sprintf("Node %s is unreachable", name),
-		}
-	case status == statusOK && prior == statusDown:
-		alert = &Alert{
-			Firing: false,
-			Title:  fmt.Sprintf("Node %s recovered", name),
-		}
-	}
-	e.mu.Unlock()
-
-	if alert == nil {
-		return
-	}
-	alert.Kind = KindPeer
-	alert.Node = name
-	alert.Subject = name
-	e.fire(*alert)
-}
-
-// ObserveMetric evaluates CPU, Memory, and Disk percentages independently
-// against their thresholds and dispatches alerts only on a crossing. A
-// threshold <= 0 disables that metric entirely. diskPercent should be the
-// highest usage across the node's mounts. Safe to call concurrently.
-func (e *Engine) ObserveMetric(node string, cpuPercent, memPercent, diskPercent float64) {
-	th := e.thresholds()
-	e.evaluateMetric(node, "cpu", "CPU", cpuPercent, th.CPUPercent)
-	e.evaluateMetric(node, "mem", "Memory", memPercent, th.MemPercent)
-	e.evaluateMetric(node, "disk", "Disk", diskPercent, th.DiskPercent)
-}
-
-// evaluateMetric handles a single metric's threshold crossing.
-func (e *Engine) evaluateMetric(node, suffix, label string, value, threshold float64) {
-	if threshold <= 0 {
-		// Metric disabled — never fire, and don't track state.
-		return
-	}
-	key := node + "|" + suffix
-	over := value >= threshold
-
-	e.mu.Lock()
-	prior := e.metricOver[key] // absent => false
-	e.metricOver[key] = over
-
-	if over == prior {
-		e.mu.Unlock()
-		return
-	}
-
-	var alert Alert
-	if over {
-		alert = Alert{
-			Firing: true,
-			Title:  fmt.Sprintf("%s on %s is high: %.1f%% (threshold %.1f%%)", label, node, value, threshold),
-			Detail: fmt.Sprintf("%s usage %.1f%% exceeded threshold %.1f%%", label, value, threshold),
+		if st.level == levelOK && now.Sub(st.breachSince) >= forDur {
+			st.level = severity
+			toFire = &Alert{
+				Firing: true,
+				Title:  fmt.Sprintf("%s — %s", rule.Name, scope(node, entity)),
+				Detail: detail,
+			}
 		}
 	} else {
-		alert = Alert{
-			Firing: false,
-			Title:  fmt.Sprintf("%s on %s recovered: %.1f%%", label, node, value),
-			Detail: fmt.Sprintf("%s usage %.1f%% back below threshold %.1f%%", label, value, threshold),
+		st.breachSince = time.Time{}
+		if st.level != levelOK {
+			if st.recoveredAt.IsZero() {
+				st.recoveredAt = now
+			}
+			if now.Sub(st.recoveredAt) >= graceDur {
+				st.level = levelOK
+				st.recoveredAt = time.Time{}
+				toFire = &Alert{
+					Firing: false,
+					Title:  fmt.Sprintf("%s recovered — %s", rule.Name, scope(node, entity)),
+					Detail: detail,
+				}
+			}
 		}
 	}
+
+	e.state[key] = st
 	e.mu.Unlock()
 
-	alert.Kind = KindMetric
-	alert.Node = node
-	alert.Subject = label
-	e.fire(alert)
+	if toFire == nil {
+		return
+	}
+	toFire.Kind = KindRule
+	toFire.RuleID = rule.ID
+	toFire.Node = node
+	toFire.Entity = entity
+	toFire.Subject = rule.Name
+	toFire.Severity = severity
+	toFire.Time = now.UTC()
+	e.dispatcher.Dispatch(*toFire)
 }
 
-// fire stamps the alert time and dispatches it. Never called while holding the
-// mutex.
-func (e *Engine) fire(a Alert) {
-	a.Time = time.Now().UTC()
-	e.dispatcher.Dispatch(a)
+// Forget drops all remembered state for a rule (e.g. when it is deleted), so a
+// later rule reusing those keys starts clean.
+func (e *Engine) Forget(ruleID int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	prefix := fmt.Sprintf("%d|", ruleID)
+	for k := range e.state {
+		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
+			delete(e.state, k)
+		}
+	}
+}
+
+// ForgetNode drops all remembered state concerning a node (e.g. when a peer is
+// removed), across every rule, so its alerts don't linger.
+func (e *Engine) ForgetNode(node string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for k := range e.state {
+		parts := strings.SplitN(k, "|", 3)
+		if len(parts) == 3 && parts[1] == node {
+			delete(e.state, k)
+		}
+	}
+}
+
+// scope renders the node (and entity, if any) for an alert title.
+func scope(node, entity string) string {
+	if entity != "" && entity != "*" {
+		return node + " [" + entity + "]"
+	}
+	return node
 }

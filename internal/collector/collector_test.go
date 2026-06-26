@@ -33,7 +33,7 @@ func TestCollectorSamplesAndPersists(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	c := New(db, "test-node", testSettings(t, db, time.Hour), nil)
+	c := New(db, "test-node", testSettings(t, db, time.Hour))
 
 	// One immediate sample, then stop before the first tick fires.
 	c.sampleOnce(context.Background())
@@ -69,7 +69,7 @@ func TestCollectorPrunesOldSamples(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	c := New(db, "test-node", testSettings(t, db, time.Hour), nil)
+	c := New(db, "test-node", testSettings(t, db, time.Hour))
 	c.prune()
 
 	if _, ok, err := db.LatestMetric("test-node"); err != nil {
@@ -87,7 +87,7 @@ func TestCollectorRunStopsOnContextCancel(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	ctx, cancel := context.WithCancel(context.Background())
-	c := New(db, "test-node", testSettings(t, db, time.Hour), nil)
+	c := New(db, "test-node", testSettings(t, db, time.Hour))
 
 	done := make(chan struct{})
 	go func() {

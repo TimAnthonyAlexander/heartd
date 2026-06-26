@@ -55,23 +55,27 @@ func run(configPath, addrOverride string) error {
 		return fmt.Errorf("load settings: %w", err)
 	}
 
-	// Alert engine reads thresholds and notify channels fresh from settings, so
+	// Alert engine: dispatches via notify channels read fresh from settings, so
 	// edits apply without a restart.
 	engine := buildAlertEngine(set)
 
 	// Start the metrics collection loop.
-	coll := collector.New(db, cfg.Server.Name, set, engine)
+	coll := collector.New(db, cfg.Server.Name, set)
 	go coll.Run(ctx)
 
 	// Start the service-check scheduler (the check list is read live).
-	sched := scheduler.New(db, cfg.Server.Name, set, engine)
+	sched := scheduler.New(db, cfg.Server.Name, set)
 	go sched.Run(ctx)
 
 	// Start the cluster poller (announce + poll peers). The peer list lives in
 	// storage and is managed live from the dashboard, so the poller always runs
 	// even when no peers are configured yet.
-	poller := cluster.New(db, cfg.Server.Name, cfg.Server.AdvertiseURL, set, engine)
+	poller := cluster.New(db, cfg.Server.Name, cfg.Server.AdvertiseURL, set)
 	go poller.Run(ctx)
+
+	// Start the alert rule evaluator: reads rules + current data each tick and
+	// fires through the engine. This is the single alerting path.
+	go alert.NewRunner(db, cfg.Server.Name, set, engine).Run(ctx)
 
 	addr := addrOverride
 	if addr == "" {
@@ -127,16 +131,13 @@ func pruneSessions(ctx context.Context, a *auth.Service) {
 	}
 }
 
-// buildAlertEngine assembles an alert engine whose thresholds and notification
-// channels are read fresh from settings on every use, so runtime edits apply
-// immediately.
+// buildAlertEngine assembles an alert engine whose notification channels are
+// read fresh from settings on every dispatch, so runtime edits apply immediately.
 func buildAlertEngine(set *settings.Service) *alert.Engine {
 	dispatcher := alert.NewDynamicDispatcher(func() []alert.Notifier {
 		return notifiersFromSettings(set.Notify())
 	})
-	return alert.NewEngine(dispatcher, func() config.Thresholds {
-		return set.General().Thresholds()
-	})
+	return alert.NewEngine(dispatcher)
 }
 
 // notifiersFromSettings builds the active notifiers from current notify settings.

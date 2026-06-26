@@ -7,7 +7,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/timanthonyalexander/heartd/internal/alert"
 	"github.com/timanthonyalexander/heartd/internal/metrics"
 	"github.com/timanthonyalexander/heartd/internal/settings"
 	"github.com/timanthonyalexander/heartd/internal/storage"
@@ -26,16 +25,15 @@ type Collector struct {
 	db       *storage.DB
 	node     string
 	settings *settings.Service
-	engine   *alert.Engine // optional; nil when alerting is disabled
 
 	// Previous network counters, for deriving throughput rates between samples.
 	prevNet   metrics.NetCounters
 	prevNetAt time.Time
 }
 
-// New builds a Collector for the local node. engine may be nil.
-func New(db *storage.DB, node string, set *settings.Service, engine *alert.Engine) *Collector {
-	return &Collector{db: db, node: node, settings: set, engine: engine}
+// New builds a Collector for the local node.
+func New(db *storage.DB, node string, set *settings.Service) *Collector {
+	return &Collector{db: db, node: node, settings: set}
 }
 
 // Run samples immediately, then once per current interval until ctx is cancelled.
@@ -83,16 +81,12 @@ func (c *Collector) sampleOnce(ctx context.Context) {
 		log.Printf("collector: insert failed: %v", err)
 	}
 
-	diskMax := c.sampleDisks(ctx, at)
+	c.sampleDisks(ctx, at)
 	c.sampleNet(ctx, at)
-
-	if c.engine != nil {
-		c.engine.ObserveMetric(c.node, snap.CPUPercent, snap.MemPercent, diskMax)
-	}
 }
 
 // sampleDisks records current usage per mount and returns the highest usage
-// percentage across mounts (for threshold alerting).
+// percentage across mounts.
 func (c *Collector) sampleDisks(ctx context.Context, at time.Time) float64 {
 	disks, err := metrics.Disks(ctx)
 	if err != nil {
