@@ -36,25 +36,17 @@ resources, service checks, and the reachability of every node in a small cluster
 
 ## Quick start
 
-**Install as a service** (Linux) — one command. Downloads the binary, creates a
-**hardened systemd service** bound to `127.0.0.1`, and starts it so it survives
-reboots:
+One line on any Linux box. It downloads the binary, creates a **hardened systemd
+service** bound to `127.0.0.1`, and starts it (so it survives reboots):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/install.sh | sudo bash
 ```
 
-Then open <http://localhost:9300> (or put it behind your reverse proxy — see
-[Deployment](#deployment-linux)) and create the first admin account. With no
+Then open <http://localhost:9300> — or put it behind your reverse proxy, see
+[Deployment](#deployment-linux) — and create the first admin account. With no
 config, heartd runs on sensible defaults (local node, 30s sampling, the default
-alert rules) — everything else is set in the dashboard.
-
-**Just kick the tires?** Run it ephemerally in your terminal instead — no install,
-no sudo, nothing persists (it runs in the foreground; `Ctrl-C` stops it):
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/run.sh | bash
-```
+alert rules); everything else is configured in the dashboard.
 
 Building from source instead? See [Building](#building).
 
@@ -331,7 +323,6 @@ internal/
   web/             go:embed of the built frontend
 frontend/          React + Vite + TypeScript + MUI dashboard
 deploy/            systemd unit template
-run.sh             download-and-run bootstrap (no install)
 install.sh         systemd installer (Linux)
 update.sh          in-place binary upgrade (Linux)
 ```
