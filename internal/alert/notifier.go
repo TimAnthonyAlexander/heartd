@@ -101,13 +101,26 @@ func NewEmailNotifier(cfg config.EmailNotify) *EmailNotifier {
 // Name implements Notifier.
 func (e *EmailNotifier) Name() string { return "email" }
 
-// Send builds an RFC 822 message and sends it via net/smtp.SendMail. The
-// context is honoured by short-circuiting if it is already cancelled; SendMail
-// itself does not accept a context, so delivery time is bounded by the SMTP
-// server and the surrounding dispatch goroutine.
+// Send builds an RFC 822 message and sends it via net/smtp.SendMail.
+//
+// net/smtp does not accept a context, and SendMail's underlying net.Dial has no
+// timeout — so against an unreachable host (or a bogus port) it can block on the
+// OS TCP connect for over a minute, hanging the caller (e.g. the "send test"
+// button) the whole time. We guard that two ways: validate the target up front
+// (so a missing host or invalid port fails instantly with a clear message), and
+// race SendMail against ctx so the call returns as soon as the deadline fires.
 func (e *EmailNotifier) Send(ctx context.Context, a Alert) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if strings.TrimSpace(e.cfg.SMTPHost) == "" {
+		return fmt.Errorf("SMTP host is not set")
+	}
+	if e.cfg.SMTPPort <= 0 || e.cfg.SMTPPort > 65535 {
+		return fmt.Errorf("SMTP port %d is invalid — set it to your provider's port (e.g. 587 or 465)", e.cfg.SMTPPort)
+	}
+	if len(e.cfg.To) == 0 {
+		return fmt.Errorf("no recipient address set")
 	}
 
 	addr := e.cfg.SMTPHost + ":" + strconv.Itoa(e.cfg.SMTPPort)
@@ -118,10 +131,22 @@ func (e *EmailNotifier) Send(ctx context.Context, a Alert) error {
 	}
 
 	msg := buildEmailMessage(e.cfg, a)
-	if err := smtp.SendMail(addr, auth, e.cfg.From, e.cfg.To, msg); err != nil {
-		return fmt.Errorf("send email: %w", err)
+
+	// SendMail blocks and ignores ctx; run it off-goroutine and return when
+	// either it finishes or ctx is done. The buffered channel lets a late-
+	// finishing send drain without leaking the goroutine.
+	done := make(chan error, 1)
+	go func() { done <- smtp.SendMail(addr, auth, e.cfg.From, e.cfg.To, msg) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("send email: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("send email to %s timed out (check the SMTP host, port, and connectivity): %w", addr, ctx.Err())
 	}
-	return nil
 }
 
 // buildEmailMessage constructs the raw RFC 822 message bytes for an alert. It is

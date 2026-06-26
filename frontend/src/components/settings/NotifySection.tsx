@@ -140,10 +140,12 @@ export function NotifySection({ nodeName, initial, onSaved }: Props) {
             label="SMTP port"
             type="number"
             size="small"
-            value={email.smtp_port}
+            // Show blank (not a misleading 0) when unset; most providers use 587.
+            value={email.smtp_port === 0 ? '' : email.smtp_port}
             onChange={(e) => setEmailField('smtp_port')(Number(e.target.value))}
             disabled={!email.enabled}
-            slotProps={{ htmlInput: { min: 0, step: 1 } }}
+            placeholder="587"
+            slotProps={{ htmlInput: { min: 1, max: 65535, step: 1 } }}
             fullWidth
           />
         </Box>
