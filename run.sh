@@ -42,7 +42,8 @@ else
 fi
 chmod +x "$bin"
 
-printf '\033[1;32m▶ heartd → http://localhost:9300\033[0m   (data in %s, Ctrl-C to stop)\n' "$dir" >&2
+printf '\033[1;32m▶ heartd → http://localhost:9300\033[0m   (Ctrl-C to stop)\n' "$dir" >&2
+printf '\033[2m  Ephemeral: runs in this terminal, nothing is installed. For a persistent\n  systemd service, run instead:\n    curl -fsSL https://raw.githubusercontent.com/%s/main/install.sh | sudo bash\033[0m\n' "$REPO" >&2
 
 # Run from the cache dir so heartd.db lands there, not in your current folder.
 cd "$dir"

@@ -36,26 +36,27 @@ resources, service checks, and the reachability of every node in a small cluster
 
 ## Quick start
 
-**Run it now** (Linux or macOS) — downloads heartd for your machine and starts it
-on <http://localhost:9300>. No clone, no build, no sudo:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/run.sh | bash
-```
-
-Open <http://localhost:9300>, create the first admin account, and you're in.
-`Ctrl-C` stops it. With no config, heartd runs on sensible defaults (local node,
-30s sampling, the default alert rules) — everything else is set in the dashboard.
-Pass flags through with `... | bash -s -- -addr :8080`.
-
-**Install as a service** (Linux) — one command, sets up a hardened systemd unit:
+**Install as a service** (Linux) — one command. Downloads the binary, creates a
+**hardened systemd service** bound to `127.0.0.1`, and starts it so it survives
+reboots:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/install.sh | sudo bash
 ```
 
-See [Deployment](#deployment-linux) for what that does, TLS/reverse-proxy notes,
-and upgrades. Building from source instead? See [Building](#building).
+Then open <http://localhost:9300> (or put it behind your reverse proxy — see
+[Deployment](#deployment-linux)) and create the first admin account. With no
+config, heartd runs on sensible defaults (local node, 30s sampling, the default
+alert rules) — everything else is set in the dashboard.
+
+**Just kick the tires?** Run it ephemerally in your terminal instead — no install,
+no sudo, nothing persists (it runs in the foreground; `Ctrl-C` stops it):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/run.sh | bash
+```
+
+Building from source instead? See [Building](#building).
 
 Flags:
 
