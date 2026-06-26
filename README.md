@@ -8,7 +8,7 @@ heartd gives small teams an honest answer to *"is everything okay?"* — system
 resources, service checks, and the reachability of every node in a small cluster
 — without the weight of a full observability platform.
 
-![heartd dashboard](docs/dashboard.png)
+![heartd dashboard](docs/dashboard_2.png)
 
 ## Features
 
