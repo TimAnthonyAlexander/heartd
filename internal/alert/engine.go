@@ -58,9 +58,10 @@ type ActiveAlert struct {
 // (edge-triggered), honouring each rule's sustained-duration and recovery-grace
 // timers. It is safe for concurrent use.
 type Engine struct {
-	dispatcher dispatcher
-	coord      *Coordinator // optional cross-node dedup; nil = send everything locally
-	recorder   func(Alert)  // optional incident-history sink; nil = record nothing
+	dispatcher  dispatcher
+	coord       *Coordinator             // optional cross-node dedup; nil = send everything locally
+	recorder    func(Alert)              // optional incident-history sink; nil = record nothing
+	displayName func(node string) string // optional node→display-name lookup for outbound text; nil = use raw name
 
 	mu    sync.Mutex
 	state map[string]ruleState
@@ -81,17 +82,44 @@ func (e *Engine) SetCoordinator(c *Coordinator) { e.coord = c }
 // restart-safety priming records no synthetic history.
 func (e *Engine) SetRecorder(r func(Alert)) { e.recorder = r }
 
+// SetDisplayNameResolver installs a node→display-name lookup used to relabel
+// outbound notifications (email, chat, webhook) with a node's user-set alias.
+// It is applied ONLY to the alert handed to the notifiers, after the
+// cross-node send election and after the incident-history record — so dedup
+// keys (incidentKey), the coordinator, and stored history keep the raw
+// internal node name. A resolver that returns "" (or the same name) leaves the
+// alert unchanged. Read fresh on every dispatch so live alias edits apply.
+func (e *Engine) SetDisplayNameResolver(r func(node string) string) { e.displayName = r }
+
+// withDisplayName returns a copy of a with its node-bearing fields (Node and
+// Title) rewritten to the node's display alias, when one is configured. The
+// input is never mutated. When no resolver is set, no alias exists, or the
+// alias equals the raw name, a is returned unchanged.
+func (e *Engine) withDisplayName(a Alert) Alert {
+	if e.displayName == nil || a.Node == "" {
+		return a
+	}
+	name := e.displayName(a.Node)
+	if name == "" || name == a.Node {
+		return a
+	}
+	out := a
+	out.Node = name
+	out.Title = alertTitle(a.Subject, name, a.Entity, a.Firing)
+	return out
+}
+
 // gatedDispatch sends a through the coordinator (off the caller's goroutine, so
 // the runner loop never blocks on peer queries) when one is configured; without
 // a coordinator it dispatches directly.
 func (e *Engine) gatedDispatch(a Alert) {
 	if e.coord == nil {
-		e.dispatcher.Dispatch(a)
+		e.dispatcher.Dispatch(e.withDisplayName(a))
 		return
 	}
 	go func() {
 		if e.coord.ShouldSend(a) {
-			e.dispatcher.Dispatch(a)
+			e.dispatcher.Dispatch(e.withDisplayName(a))
 		} else {
 			log.Printf("alert: suppressed %q — another node is notifying about this incident", a.Title)
 		}
@@ -152,7 +180,7 @@ func (e *Engine) Observe(rule RuleView, node, entity, detail string, conditionMe
 			st.firingSince = st.breachSince
 			toFire = &Alert{
 				Firing: true,
-				Title:  fmt.Sprintf("%s — %s", rule.Name, scope(node, entity)),
+				Title:  alertTitle(rule.Name, node, entity, true),
 				Detail: detail,
 			}
 		}
@@ -168,7 +196,7 @@ func (e *Engine) Observe(rule RuleView, node, entity, detail string, conditionMe
 				st.firingSince = time.Time{}
 				toFire = &Alert{
 					Firing: false,
-					Title:  fmt.Sprintf("%s recovered — %s", rule.Name, scope(node, entity)),
+					Title:  alertTitle(rule.Name, node, entity, false),
 					Detail: detail,
 				}
 			}
@@ -269,4 +297,14 @@ func scope(node, entity string) string {
 		return node + " [" + entity + "]"
 	}
 	return node
+}
+
+// alertTitle renders an alert's one-line title from its rule name (subject),
+// node, entity, and firing state. Shared so the engine's original title and the
+// display-name-relabelled title (withDisplayName) stay byte-identical in form.
+func alertTitle(subject, node, entity string, firing bool) string {
+	if firing {
+		return fmt.Sprintf("%s — %s", subject, scope(node, entity))
+	}
+	return fmt.Sprintf("%s recovered — %s", subject, scope(node, entity))
 }

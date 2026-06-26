@@ -67,6 +67,18 @@ func run(configPath, addrOverride string, headlessFlag bool) error {
 	coordinator := alert.NewCoordinator(cfg.Server.Name, db)
 	engine.SetCoordinator(coordinator)
 
+	// Relabel outbound notifications with each node's user-set display alias.
+	// Read fresh per dispatch so live alias edits apply without a restart. This
+	// affects only the delivered message text — dedup keys, the cross-node send
+	// election, and stored incident history keep the raw internal node name.
+	engine.SetDisplayNameResolver(func(node string) string {
+		aliases, err := db.NodeAliases()
+		if err != nil {
+			return ""
+		}
+		return aliases[node]
+	})
+
 	// Persist every confirmed transition to the incident history. The engine
 	// invokes this only on real edges (never during its restart-safety seed pass),
 	// off its lock, so a slow write can't stall the state machine.

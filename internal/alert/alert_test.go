@@ -414,6 +414,53 @@ func TestRecorderSeedEmitsNoEvents(t *testing.T) {
 	}
 }
 
+// TestDisplayNameRelabelsNotificationsOnly verifies that a configured display
+// alias rewrites the Node and Title of the DELIVERED notification, while the
+// incident-history record (and the engine's internal state) keep the raw node
+// name used for dedup.
+func TestDisplayNameRelabelsNotificationsOnly(t *testing.T) {
+	e, f := newTestEngine()
+	sink := &recordingSink{}
+	e.SetRecorder(sink.record)
+	e.SetDisplayNameResolver(func(node string) string {
+		if node == "web-01" {
+			return "Production Web"
+		}
+		return ""
+	})
+	r := RuleView{ID: 1, Name: "CPU high", Severity: "critical", Source: "cpu"}
+
+	e.Observe(r, "web-01", "/data", "CPU 95% >= 90%", true, false, t0)
+	waitFor(t, f, 1)
+
+	// Delivered notification carries the alias in both Node and Title.
+	got := f.snapshot()[0]
+	if got.Node != "Production Web" {
+		t.Errorf("delivered Node = %q, want alias %q", got.Node, "Production Web")
+	}
+	if got.Title != "CPU high — Production Web [/data]" {
+		t.Errorf("delivered Title = %q, want it relabelled with the alias", got.Title)
+	}
+
+	// History record keeps the raw internal node name.
+	waitForSink(t, sink, 1)
+	rec := sink.snapshot()[0]
+	if rec.Node != "web-01" {
+		t.Errorf("recorded Node = %q, want raw %q", rec.Node, "web-01")
+	}
+	if rec.Title != "CPU high — web-01 [/data]" {
+		t.Errorf("recorded Title = %q, want the raw internal name", rec.Title)
+	}
+
+	// A node without an alias is delivered unchanged.
+	r2 := RuleView{ID: 2, Name: "CPU high", Severity: "critical", Source: "cpu"}
+	e.Observe(r2, "db-02", "", "CPU 95% >= 90%", true, false, t0)
+	waitFor(t, f, 2)
+	if n := f.snapshot()[1].Node; n != "db-02" {
+		t.Errorf("unaliased node delivered as %q, want raw %q", n, "db-02")
+	}
+}
+
 // TestActiveAlertsSnapshot verifies the live firing-state view: only breached
 // entities appear, with their context, and a recovery clears them.
 func TestActiveAlertsSnapshot(t *testing.T) {
