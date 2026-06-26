@@ -63,6 +63,12 @@ func New(cfg Config) http.Handler {
 	protect("PUT /api/peers/{name}", s.handleUpdatePeer)
 	protect("DELETE /api/peers/{name}", s.handleDeletePeer)
 
+	// User administration (every user is an admin, so these are session-gated).
+	protect("GET /api/users", s.handleListUsers)
+	protect("POST /api/users", s.handleCreateUser)
+	protect("DELETE /api/users/{username}", s.handleDeleteUser)
+	protect("PUT /api/users/{username}/password", s.handleSetUserPassword)
+
 	protect("GET /api/nodes/{name}/metrics", s.handleMetrics)
 	protect("GET /api/nodes/{name}/metrics/history", s.handleHistory)
 	protect("GET /api/nodes/{name}/checks", s.handleChecks)

@@ -72,6 +72,63 @@ WHERE username = ?;`
 	return u, true, nil
 }
 
+// ListUsers returns all users ordered by username. PasswordHash is not
+// populated (it is never needed by callers that list users).
+func (db *DB) ListUsers() ([]User, error) {
+	const q = `
+SELECT id, username, created_at
+FROM user
+ORDER BY username ASC;`
+	rows, err := db.conn.Query(q)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list users: %w", err)
+	}
+	defer rows.Close()
+
+	var out []User
+	for rows.Next() {
+		var (
+			u             User
+			createdAtUnix int64
+		)
+		if err := rows.Scan(&u.ID, &u.Username, &createdAtUnix); err != nil {
+			return nil, fmt.Errorf("storage: scan user: %w", err)
+		}
+		u.CreatedAt = time.Unix(createdAtUnix, 0).UTC()
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage: iterate users: %w", err)
+	}
+	return out, nil
+}
+
+// DeleteUser removes a user by id. Sessions reference the user, so callers
+// should also call DeleteSessionsForUser to avoid orphaned sessions.
+func (db *DB) DeleteUser(id int64) error {
+	if _, err := db.conn.Exec(`DELETE FROM user WHERE id = ?;`, id); err != nil {
+		return fmt.Errorf("storage: delete user %d: %w", id, err)
+	}
+	return nil
+}
+
+// DeleteSessionsForUser removes all sessions belonging to a user (used when the
+// user is deleted, or to force re-login).
+func (db *DB) DeleteSessionsForUser(id int64) error {
+	if _, err := db.conn.Exec(`DELETE FROM session WHERE user_id = ?;`, id); err != nil {
+		return fmt.Errorf("storage: delete sessions for user %d: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateUserPassword sets a user's password hash.
+func (db *DB) UpdateUserPassword(id int64, passwordHash string) error {
+	if _, err := db.conn.Exec(`UPDATE user SET password_hash = ? WHERE id = ?;`, passwordHash, id); err != nil {
+		return fmt.Errorf("storage: update password for user %d: %w", id, err)
+	}
+	return nil
+}
+
 // UserCount returns the number of users (used to detect first-run /
 // "initialized").
 func (db *DB) UserCount() (int, error) {

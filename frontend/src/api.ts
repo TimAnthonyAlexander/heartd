@@ -111,6 +111,29 @@ export function authLogout(): Promise<{ status: string }> {
   return postJSON('/api/auth/logout', {})
 }
 
+// ----- User administration (every user is an admin) -----
+
+export interface UserInfo {
+  username: string
+  self: boolean
+}
+
+export function fetchUsers(signal?: AbortSignal): Promise<UserInfo[]> {
+  return getJSON<UserInfo[]>('/api/users', signal)
+}
+
+export function createUser(username: string, password: string): Promise<{ username: string }> {
+  return postJSON('/api/users', { username, password })
+}
+
+export function deleteUser(username: string): Promise<{ status: string }> {
+  return delJSON(`/api/users/${encodeURIComponent(username)}`)
+}
+
+export function changeUserPassword(username: string, password: string): Promise<{ status: string }> {
+  return putJSON(`/api/users/${encodeURIComponent(username)}/password`, { password })
+}
+
 export function fetchNodes(signal?: AbortSignal): Promise<Node[]> {
   return getJSON<Node[]>('/api/nodes', signal)
 }

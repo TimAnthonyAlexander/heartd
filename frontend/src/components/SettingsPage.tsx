@@ -1,14 +1,14 @@
-import { Box, Button, Paper, Typography } from '@mui/material'
+import { Box, Button, Stack, Typography } from '@mui/material'
 import { colors } from '../theme'
+import { UsersSection } from './settings/UsersSection'
 
 interface Props {
   onClose: () => void
 }
 
-// The global settings page is now a thin placeholder: per-node configuration
-// (checks, notifications, thresholds, sampling) moved onto each node's own tabs.
-// This page is reserved for genuinely cluster-wide concerns and account
-// management, which don't exist yet.
+// The global settings page holds genuinely cluster-wide concerns. Per-node
+// configuration (checks, notifications, thresholds, sampling) lives on each
+// node's own tabs; this page currently manages user accounts.
 export function SettingsPage({ onClose }: Props) {
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: colors.bg }}>
@@ -29,21 +29,14 @@ export function SettingsPage({ onClose }: Props) {
           </Button>
         </Box>
 
-        <Paper elevation={0} sx={{ p: 3, borderRadius: 2.5 }}>
-          <Typography variant="overline" sx={{ color: colors.textDim }}>
-            Per-node configuration moved
+        <Stack spacing={3}>
+          <UsersSection />
+          <Typography sx={{ fontSize: 13, color: colors.textFaint }}>
+            Looking for checks, notifications, thresholds, or sampling? Those are now
+            configured per node — open a node and use its Checks, Notifications,
+            Alerts, and Settings tabs.
           </Typography>
-          <Typography sx={{ fontSize: 14, color: colors.textDim, mt: 1 }}>
-            Checks, notifications, alert thresholds, and sampling are now configured
-            on each node directly — open a node and use its Checks, Notifications,
-            Alerts, and Settings tabs. Editing a remote node proxies the change to it
-            over the secured peer link.
-          </Typography>
-          <Typography sx={{ fontSize: 13, color: colors.textFaint, mt: 2 }}>
-            This page is reserved for future cluster-wide settings and account
-            management.
-          </Typography>
-        </Paper>
+        </Stack>
       </Box>
     </Box>
   )

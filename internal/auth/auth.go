@@ -36,6 +36,12 @@ var (
 	ErrWeakPassword       = errors.New("auth: password too short")
 	ErrInvalidUsername    = errors.New("auth: invalid username")
 	ErrUsernameTaken      = storage.ErrUsernameTaken
+	// ErrUserNotFound is returned when an admin operation targets a username that
+	// does not exist.
+	ErrUserNotFound = errors.New("auth: user not found")
+	// ErrLastUser is returned when deleting a user would leave zero users, which
+	// would drop the system back into the open first-run admin-creation flow.
+	ErrLastUser = errors.New("auth: cannot delete the last user")
 )
 
 // User is the public view of an authenticated user (no password material).
@@ -133,28 +139,100 @@ func (s *Service) PruneExpired() error {
 	return err
 }
 
-func (s *Service) createUserAndSession(username, password string) (User, string, error) {
+// CreateUser creates a new account WITHOUT logging anyone in (used by admins to
+// add other users). Validates the username and password, then stores a bcrypt
+// hash. Returns ErrUsernameTaken if the username already exists.
+func (s *Service) CreateUser(username, password string) (User, error) {
 	username = strings.TrimSpace(username)
 	if username == "" || len(username) > MaxUsernameLen {
-		return User{}, "", ErrInvalidUsername
+		return User{}, ErrInvalidUsername
 	}
 	if len(password) < MinPasswordLen {
-		return User{}, "", ErrWeakPassword
+		return User{}, ErrWeakPassword
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return User{}, "", err
+		return User{}, err
 	}
 	stored, err := s.db.CreateUser(username, string(hash))
 	if err != nil {
-		return User{}, "", err
+		return User{}, err
 	}
-	token, err := s.newSession(stored.ID)
+	return User{ID: stored.ID, Username: stored.Username}, nil
+}
+
+// ListUsers returns all accounts (no password material), ordered by username.
+func (s *Service) ListUsers() ([]User, error) {
+	stored, err := s.db.ListUsers()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]User, 0, len(stored))
+	for _, u := range stored {
+		out = append(out, User{ID: u.ID, Username: u.Username})
+	}
+	return out, nil
+}
+
+// DeleteUser removes the named account and all of its sessions. It refuses to
+// delete the last remaining user (ErrLastUser) so the system can never fall back
+// to the open first-run admin-creation flow. Returns ErrUserNotFound if unknown.
+func (s *Service) DeleteUser(username string) error {
+	username = strings.TrimSpace(username)
+	stored, ok, err := s.db.UserByUsername(username)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrUserNotFound
+	}
+
+	count, err := s.db.UserCount()
+	if err != nil {
+		return err
+	}
+	if count <= 1 {
+		return ErrLastUser
+	}
+
+	if err := s.db.DeleteUser(stored.ID); err != nil {
+		return err
+	}
+	return s.db.DeleteSessionsForUser(stored.ID)
+}
+
+// SetPassword changes the named user's password after validating its length.
+// Existing sessions are left intact. Returns ErrUserNotFound if unknown.
+func (s *Service) SetPassword(username, newPassword string) error {
+	username = strings.TrimSpace(username)
+	stored, ok, err := s.db.UserByUsername(username)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrUserNotFound
+	}
+	if len(newPassword) < MinPasswordLen {
+		return ErrWeakPassword
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	return s.db.UpdateUserPassword(stored.ID, string(hash))
+}
+
+func (s *Service) createUserAndSession(username, password string) (User, string, error) {
+	user, err := s.CreateUser(username, password)
 	if err != nil {
 		return User{}, "", err
 	}
-	return User{ID: stored.ID, Username: stored.Username}, token, nil
+	token, err := s.newSession(user.ID)
+	if err != nil {
+		return User{}, "", err
+	}
+	return user, token, nil
 }
 
 func (s *Service) newSession(userID int64) (string, error) {
