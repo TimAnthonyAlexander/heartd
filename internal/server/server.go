@@ -715,21 +715,23 @@ func (s *server) validSecret(presented string) bool {
 	return ok
 }
 
-// handlePeerAnnounce records a peer that announced itself to this node.
+// handlePeerAnnounce lets a node refresh how it's reached, but only for a peer
+// THIS node already knows by name. It never CREATES a peer: the peer list is
+// managed explicitly in the dashboard, and a node naming itself differently than
+// you added it (e.g. its config name vs the name you chose) would otherwise show
+// up as a surprise duplicate with whatever URL it advertised (often a useless
+// localhost). Unknown announcers are simply acknowledged and ignored.
 func (s *server) handlePeerAnnounce(w http.ResponseWriter, r *http.Request) {
 	var req cluster.AnnounceRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	if req.Name == "" || req.URL == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and url are required"})
-		return
-	}
-	// Don't grant a secret from an announce; preserve any existing one.
-	if err := s.cfg.DB.UpsertPeer(storage.Peer{Name: req.Name, URL: req.URL}); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+	if req.Name != "" && req.URL != "" {
+		if _, known, err := s.cfg.DB.GetPeer(req.Name); err == nil && known {
+			// Known peer: refresh its advertised URL (preserves its secret).
+			_ = s.cfg.DB.UpsertPeer(storage.Peer{Name: req.Name, URL: req.URL})
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"name": s.cfg.NodeName})
 }
