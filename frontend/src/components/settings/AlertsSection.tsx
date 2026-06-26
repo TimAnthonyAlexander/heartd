@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Box, Typography } from '@mui/material'
 import type { AlertRule } from '../../api'
 import { createAlert, deleteAlert, updateAlert } from '../../api'
@@ -11,13 +11,17 @@ interface Props {
   nodeName: string
   alerts: AlertRule[]
   onChange: (alerts: AlertRule[]) => void
+  // When set (e.g. from a dashboard "Edit" click), open this alert's form once
+  // it's present, then call onEditConsumed so the request isn't replayed.
+  editId?: number
+  onEditConsumed?: () => void
 }
 
 const SYMBOL: Record<string, string> = { '>=': '≥', '>': '>', '<=': '≤', '<': '<' }
 
 // describe renders the condition in plain language, e.g. "CPU ≥ 90%" or
 // "Disk / ≥ 95%" or "Service check failing".
-function describe(r: AlertRule): string {
+export function describe(r: AlertRule): string {
   const meta = sourceMeta(r.source)
   const target = meta.entity && r.entity && r.entity !== '*' ? ` ${r.entity}` : meta.entity ? ' (any)' : ''
   if (meta.numeric) {
@@ -27,11 +31,11 @@ function describe(r: AlertRule): string {
   return `${meta.label}${target}`
 }
 
-function severityColor(severity: string): string {
+export function severityColor(severity: string): string {
   return severity === 'critical' ? colors.error : colors.warn
 }
 
-export function AlertsSection({ nodeName, alerts, onChange }: Props) {
+export function AlertsSection({ nodeName, alerts, onChange, editId, onEditConsumed }: Props) {
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<AlertRule | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -47,6 +51,17 @@ export function AlertsSection({ nodeName, alerts, onChange }: Props) {
     setError(null)
     setFormOpen(true)
   }
+
+  // Honor a deep-link edit request from the dashboard: open the matching alert's
+  // form once it has loaded, then consume the request (whether or not it matched,
+  // so a stale id doesn't linger).
+  useEffect(() => {
+    if (editId == null) return
+    const r = alerts.find((a) => a.id === editId)
+    if (r) openEdit(r)
+    onEditConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editId, alerts])
 
   const submit = async (rule: AlertRule) => {
     if (rule.id === 0) {

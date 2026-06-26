@@ -1,9 +1,12 @@
-import { Box, Paper, Typography } from '@mui/material'
+import { Box, IconButton, Paper, Tooltip, Typography } from '@mui/material'
 import type { Check } from '../api'
 import { colors, statusColor } from '../theme'
 
 interface Props {
   checks: Check[]
+  // Click-to-edit: jumps to the Checks tab with this check's form open (matched
+  // by name). Omit to hide the edit affordance.
+  onEdit?: (name: string) => void
 }
 
 function relativeTime(iso: string): string {
@@ -17,7 +20,7 @@ function relativeTime(iso: string): string {
 // Sort failing first, then unknown, then ok; stable by name within a group.
 const order: Record<Check['status'], number> = { failing: 0, unknown: 1, ok: 2 }
 
-export function ChecksTable({ checks }: Props) {
+export function ChecksTable({ checks, onEdit }: Props) {
   if (checks.length === 0) {
     return (
       <Typography sx={{ color: colors.textFaint, fontSize: 13 }}>
@@ -59,6 +62,7 @@ export function ChecksTable({ checks }: Props) {
                 py: 1.5,
                 borderTop: i === 0 ? 'none' : `1px solid ${colors.border}`,
                 borderLeft: `2px solid ${c.status === 'failing' ? color : 'transparent'}`,
+              ...(onEdit && { '&:hover .check-edit': { opacity: 1 } }),
               }}
             >
               <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
@@ -79,6 +83,20 @@ export function ChecksTable({ checks }: Props) {
               <Typography sx={{ fontSize: 12, color: colors.textFaint, width: 64, textAlign: 'right' }}>
                 {relativeTime(c.last_checked)}
               </Typography>
+              {onEdit && (
+                <Tooltip title="Edit">
+                  <IconButton
+                    className="check-edit"
+                    size="small"
+                    onClick={() => onEdit(c.name)}
+                    sx={{ color: colors.textDim, opacity: 0, transition: 'opacity 120ms', p: 0.5 }}
+                  >
+                    <Box component="span" sx={{ fontSize: 13, lineHeight: 1 }}>
+                      ✎
+                    </Box>
+                  </IconButton>
+                </Tooltip>
+              )}
             </Box>
           )
         })}

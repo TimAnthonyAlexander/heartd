@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Box, Button, Chip, IconButton, Switch, Tooltip, Typography } from '@mui/material'
 import type { CheckConfig } from '../../api'
 import { createCheck, deleteCheck, updateCheck } from '../../api'
@@ -10,6 +10,11 @@ interface Props {
   nodeName: string
   checks: CheckConfig[]
   onChange: (checks: CheckConfig[]) => void
+  // When set (e.g. from a dashboard "Edit" click), open the form for the check
+  // with this name once it's present, then call onEditConsumed. Matched by name
+  // because the dashboard knows checks by their runtime status, not their id.
+  editName?: string
+  onEditConsumed?: () => void
 }
 
 // The defining parameter for a check, shown in the row summary.
@@ -28,7 +33,7 @@ function checkParam(c: CheckConfig): string {
   }
 }
 
-export function ChecksSection({ nodeName, checks, onChange }: Props) {
+export function ChecksSection({ nodeName, checks, onChange, editName, onEditConsumed }: Props) {
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<CheckConfig | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -45,6 +50,17 @@ export function ChecksSection({ nodeName, checks, onChange }: Props) {
     setError(null)
     setFormOpen(true)
   }
+
+  // Honor a deep-link edit request from the dashboard: open the matching check's
+  // form once checks have loaded, then consume the request (even if unmatched, so
+  // a stale name doesn't linger).
+  useEffect(() => {
+    if (editName == null) return
+    const c = checks.find((x) => x.name === editName)
+    if (c) openEdit(c)
+    onEditConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editName, checks])
 
   const submit = async (check: CheckConfig) => {
     setError(null)

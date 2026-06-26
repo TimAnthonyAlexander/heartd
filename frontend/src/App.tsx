@@ -7,12 +7,14 @@ import { MetricPanel } from './components/MetricPanel'
 import { DiskPanel } from './components/DiskPanel'
 import { NetworkPanel } from './components/NetworkPanel'
 import { ChecksTable } from './components/ChecksTable'
-import { NodeConfig, type ConfigTab } from './components/NodeConfig'
+import { AlertsPanel } from './components/AlertsPanel'
+import { NodeConfig, type ConfigTab, type EditTarget } from './components/NodeConfig'
 import { SegmentedTabs, type TabItem } from './components/SegmentedTabs'
 import { RenameDialog } from './components/RenameDialog'
 import { nodeLabel } from './api'
 import { useCluster } from './hooks/useCluster'
 import { useNodeData } from './hooks/useNodeData'
+import { useNodeAlerts } from './hooks/useNodeAlerts'
 import { colors, theme } from './theme'
 
 type NodeTab = 'dashboard' | ConfigTab
@@ -55,13 +57,23 @@ export default function App({ username, onLogout }: AppProps) {
   const [paused, setPaused] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
+  const [editTarget, setEditTarget] = useState<EditTarget>(null)
 
   const goToTab = (t: NodeTab) => {
     if (selected) navigate(nodePath(selected, t))
   }
 
+  // requestEdit jumps from the dashboard to the Checks/Alerts tab with the chosen
+  // item's edit form open. The section consumes editTarget once it has loaded.
+  const requestEdit = (t: NonNullable<EditTarget>) => {
+    if (!selected) return
+    setEditTarget(t)
+    navigate(nodePath(selected, t.kind === 'check' ? 'checks' : 'alerts'))
+  }
+
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
   const data = useNodeData(selected, rangeMinutes, paused)
+  const alerts = useNodeAlerts(selected, tab === 'dashboard')
 
   // Default to the local node, or fall back if the URL names an unknown node.
   useEffect(() => {
@@ -179,13 +191,21 @@ export default function App({ username, onLogout }: AppProps) {
                 <NetworkPanel net={data.net} series={data.netSeries} dimmed={data.unreachable} />
               </Box>
 
-              <ChecksTable checks={data.checks} />
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <ChecksTable
+                  checks={data.checks}
+                  onEdit={(name) => requestEdit({ kind: 'check', name })}
+                />
+                <AlertsPanel alerts={alerts} onEdit={(id) => requestEdit({ kind: 'alert', id })} />
+              </Box>
             </>
           ) : selected ? (
             <NodeConfig
               nodeName={selected}
               isLocal={selectedNode?.local ?? false}
               tab={tab}
+              editTarget={editTarget}
+              onEditConsumed={() => setEditTarget(null)}
             />
           ) : null}
         </Box>
