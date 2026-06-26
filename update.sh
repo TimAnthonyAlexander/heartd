@@ -203,7 +203,14 @@ info "arch:      $ARCH"
 info "health:    http://127.0.0.1:${PORT}/api/health"
 echo
 
-confirm "Replace the heartd binary and restart the service?" || die "aborted."
+# Confirm before swapping. An interactive run asks; a piped one-liner or --yes
+# proceeds — running the updater is the consent, and the current binary is backed
+# up and automatically rolled back if the new one fails to start.
+if [ "$ASSUME_YES" != "yes" ] && [ -t 0 ]; then
+  confirm "Replace the heartd binary and restart the service?" || die "aborted."
+elif [ "$ASSUME_YES" != "yes" ]; then
+  info "Non-interactive: proceeding (current binary is backed up; auto-rollback on failure)."
+fi
 
 # ----- 1. back up the current binary (so a bad update is reversible) -----
 BACKUP=""

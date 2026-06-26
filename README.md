@@ -237,10 +237,11 @@ curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/ins
   | sudo bash -s -- --domain heartd.example.com
 ```
 
-Upgrade later with the same idea (`--yes` since a piped script can't prompt):
+Upgrade later with the same idea (a piped run proceeds automatically; it backs up
+the binary and rolls back if the new one fails to start):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/update.sh | sudo bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/update.sh | sudo bash
 ```
 
 > The one-liner pulls a prebuilt binary from GitHub Releases. Prefer not to pipe
