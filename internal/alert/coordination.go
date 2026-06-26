@@ -33,10 +33,11 @@ type PeerLister interface {
 // node's own metric/check alerts are observed by nobody else, so they always
 // send directly and never enter the ledger.
 type Coordinator struct {
-	selfName string
-	peers    PeerLister
-	client   *http.Client
-	ttl      time.Duration
+	selfName      string
+	peers         PeerLister
+	client        *http.Client
+	ttl           time.Duration
+	clusterSecret string // fallback secret for peers with no per-link secret (gossiped)
 
 	mu     sync.Mutex
 	ledger map[string]*claimEntry
@@ -69,6 +70,30 @@ func NewCoordinator(selfName string, peers PeerLister) *Coordinator {
 		ttl:      10 * time.Minute,
 		ledger:   make(map[string]*claimEntry),
 	}
+}
+
+// SetClusterSecret installs the shared secret presented to peers that carry no
+// per-link secret of their own (i.e. gossip-discovered peers), so cross-node
+// alert dedup still authenticates across a cluster that shares one secret. When
+// left empty the secret is derived from the existing peer table instead.
+func (c *Coordinator) SetClusterSecret(secret string) { c.clusterSecret = secret }
+
+// secretFor returns the secret to present to p: its per-link secret when set,
+// otherwise the configured cluster secret, otherwise the secret the existing
+// peer table already shares. This path runs only on alert edges, so the extra
+// peer lookup for the derived case is negligible.
+func (c *Coordinator) secretFor(p storage.Peer) string {
+	if p.Secret != "" {
+		return p.Secret
+	}
+	if c.clusterSecret != "" {
+		return c.clusterSecret
+	}
+	peers, err := c.peers.ListPeers()
+	if err != nil {
+		return ""
+	}
+	return storage.CommonSecret(peers)
 }
 
 // incidentKey identifies an incident across observers: same source + dead node +
@@ -205,7 +230,7 @@ func (c *Coordinator) askPeer(p storage.Peer, path, key string) (claimResponse, 
 		return claimResponse{}, false
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(secretHeader, p.Secret)
+	req.Header.Set(secretHeader, c.secretFor(p))
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return claimResponse{}, false

@@ -85,11 +85,18 @@ type peerDiskIO struct {
 // list is read fresh from storage each cycle, so peers added or removed in the
 // dashboard take effect without a restart.
 type Poller struct {
-	db           *storage.DB
-	selfName     string
-	advertiseURL string
-	settings     *settings.Service
-	client       *http.Client
+	db            *storage.DB
+	selfName      string
+	advertiseURL  string
+	clusterSecret string // explicit shared secret from config; "" = derive from peers
+	settings      *settings.Service
+	client        *http.Client
+
+	// fallback is the secret presented to peers that carry no per-link secret of
+	// their own (gossip-discovered peers). Resolved once per cycle in Run, then
+	// read by the per-peer goroutines pollAll spawns; the wg.Wait barrier each
+	// cycle orders the write before the next cycle's reads, so no lock is needed.
+	fallback string
 }
 
 const fallbackPollInterval = 15 * time.Second
@@ -97,23 +104,63 @@ const fallbackPollInterval = 15 * time.Second
 // New builds a Poller. The peer list lives in storage (seeded once from config
 // on first run). Alerting on peer reachability is handled by the alert Runner,
 // which reads the persisted peer status.
-func New(db *storage.DB, selfName, advertiseURL string, set *settings.Service) *Poller {
+//
+// clusterSecret is the node's configured peer_secret. It is the trust anchor for
+// membership gossip: auto-discovered and self-announced peers arrive without a
+// per-link secret, so outbound calls to them fall back to a shared secret. When
+// clusterSecret is empty the fallback is derived from the existing peer table
+// (the secret the cluster already shares), so gossip needs no config at all in a
+// cluster that already uses one secret across its links.
+func New(db *storage.DB, selfName, advertiseURL, clusterSecret string, set *settings.Service) *Poller {
 	return &Poller{
-		db:           db,
-		selfName:     selfName,
-		advertiseURL: advertiseURL,
-		settings:     set,
-		client:       &http.Client{Timeout: 8 * time.Second},
+		db:            db,
+		selfName:      selfName,
+		advertiseURL:  advertiseURL,
+		clusterSecret: clusterSecret,
+		settings:      set,
+		client:        &http.Client{Timeout: 8 * time.Second},
 	}
 }
 
-// Run announces this node to its peers, then polls all peers once immediately and
-// once per current interval until ctx is cancelled. The peer list is re-read from
-// storage each cycle.
-func (p *Poller) Run(ctx context.Context) {
-	p.announceAll(ctx)
+// refreshFallback resolves the secret presented to secret-less (gossiped) peers
+// for this cycle: the explicitly configured cluster secret when set, otherwise
+// the secret the existing peer table already shares. Called once at the top of
+// each cycle, before any peer goroutines read p.fallback.
+func (p *Poller) refreshFallback() {
+	if p.clusterSecret != "" {
+		p.fallback = p.clusterSecret
+		return
+	}
+	peers, err := p.db.ListPeers()
+	if err != nil {
+		return // keep the previous value rather than blanking it on a transient error
+	}
+	p.fallback = storage.CommonSecret(peers)
+}
 
+// effectiveSecret returns the secret to present when calling peer: its own
+// per-link secret when set, otherwise this cycle's resolved fallback. This is
+// what makes gossiped peers (which carry no secret) reachable across a cluster
+// that shares one secret.
+func (p *Poller) effectiveSecret(peer storage.Peer) string {
+	if peer.Secret != "" {
+		return peer.Secret
+	}
+	return p.fallback
+}
+
+// Run drives the cluster loop until ctx is cancelled. Each cycle it (1) announces
+// this node to its peers, (2) gossips — learns about peers-of-peers and adds any
+// it doesn't yet know — and (3) polls every known peer. The peer list is re-read
+// from storage each cycle, so peers added (by hand or by gossip) take effect
+// without a restart. Announce runs every cycle (not just at startup) so a peer
+// added later is still told about this node, which is what lets a freshly added
+// node bootstrap into the mesh.
+func (p *Poller) Run(ctx context.Context) {
 	for {
+		p.refreshFallback()
+		p.announceAll(ctx)
+		p.gossip(ctx)
 		p.pollAll(ctx)
 
 		interval := p.settings.General().PeerPollInterval
@@ -158,7 +205,7 @@ func (p *Poller) announceAll(ctx context.Context) {
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set(SecretHeader, peer.Secret)
+		req.Header.Set(SecretHeader, p.effectiveSecret(peer))
 		resp, err := p.client.Do(req)
 		if err != nil {
 			log.Printf("cluster: announce to %q failed: %v", peer.Name, err)
@@ -325,7 +372,7 @@ func (p *Poller) getJSON(ctx context.Context, peer storage.Peer, path string, ou
 	if err != nil {
 		return err
 	}
-	req.Header.Set(SecretHeader, peer.Secret)
+	req.Header.Set(SecretHeader, p.effectiveSecret(peer))
 
 	resp, err := p.client.Do(req)
 	if err != nil {

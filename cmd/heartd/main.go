@@ -65,6 +65,7 @@ func run(configPath, addrOverride string, headlessFlag bool) error {
 	// of them mails about a shared event (e.g. a third node going down). Single-
 	// node setups have no peers, so this is a no-op there.
 	coordinator := alert.NewCoordinator(cfg.Server.Name, db)
+	coordinator.SetClusterSecret(cfg.Server.PeerSecret)
 	engine.SetCoordinator(coordinator)
 
 	// Relabel outbound notifications with each node's user-set display alias.
@@ -110,7 +111,7 @@ func run(configPath, addrOverride string, headlessFlag bool) error {
 	// Start the cluster poller (announce + poll peers). The peer list lives in
 	// storage and is managed live from the dashboard, so the poller always runs
 	// even when no peers are configured yet.
-	poller := cluster.New(db, cfg.Server.Name, cfg.Server.AdvertiseURL, set)
+	poller := cluster.New(db, cfg.Server.Name, cfg.Server.AdvertiseURL, cfg.Server.PeerSecret, set)
 	go poller.Run(ctx)
 
 	// Start the alert rule evaluator: reads rules + current data each tick and
@@ -141,6 +142,7 @@ func run(configPath, addrOverride string, headlessFlag bool) error {
 		Coordinator:  coordinator,
 		Headless:     headless,
 		ExtraSecrets: extraSecrets,
+		AdvertiseURL: cfg.Server.AdvertiseURL,
 	})
 	srv := &http.Server{
 		Addr:              addr,

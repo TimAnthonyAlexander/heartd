@@ -10,9 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/timanthonyalexander/heartd/internal/alert"
@@ -45,6 +43,10 @@ type Config struct {
 	// ExtraSecrets are accepted node-to-node shared secrets beyond those derived
 	// from configured peers (e.g. a headless agent's `peer_secret`).
 	ExtraSecrets []string
+	// AdvertiseURL is the URL other nodes use to reach this one. It is published
+	// in this node's /api/peer/members view so peers-of-peers can discover it.
+	// Empty = this node omits itself from membership (it can't be polled).
+	AdvertiseURL string
 }
 
 // New builds the root HTTP handler: REST API under /api and the embedded
@@ -69,6 +71,7 @@ func New(cfg Config) http.Handler {
 	// Node-to-node endpoints, protected by the shared secret. Always served (this
 	// is the only API surface in headless mode).
 	mux.Handle("POST /api/peer/announce", s.requireSecret(http.HandlerFunc(s.handlePeerAnnounce)))
+	mux.Handle("GET /api/peer/members", s.requireSecret(http.HandlerFunc(s.handlePeerMembers)))
 	mux.Handle("GET /api/peer/metrics", s.requireSecret(http.HandlerFunc(s.handlePeerMetrics)))
 	mux.Handle("GET /api/peer/checks", s.requireSecret(http.HandlerFunc(s.handlePeerChecks)))
 	mux.Handle("GET /api/peer/disk", s.requireSecret(http.HandlerFunc(s.handlePeerDisk)))
@@ -1029,6 +1032,29 @@ func (s *server) handlePeerAnnounce(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"name": s.cfg.NodeName})
 }
 
+// handlePeerMembers serves this node's view of cluster membership: itself (when
+// it has an advertise URL others can reach) plus the peers it currently polls.
+// Peers fetch this to discover nodes they were never told about directly, so a
+// node added on one machine propagates to the whole cluster. Muted peers are
+// omitted — a node this one has chosen to ignore is not pushed onto others.
+func (s *server) handlePeerMembers(w http.ResponseWriter, r *http.Request) {
+	members := make([]cluster.Member, 0)
+	if s.cfg.AdvertiseURL != "" {
+		members = append(members, cluster.Member{Name: s.cfg.NodeName, URL: s.cfg.AdvertiseURL})
+	}
+	peers, err := s.cfg.DB.ListPeers()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	for _, p := range peers {
+		if p.Enabled && p.URL != "" {
+			members = append(members, cluster.Member{Name: p.Name, URL: p.URL})
+		}
+	}
+	writeJSON(w, http.StatusOK, cluster.MembersResponse{Members: members})
+}
+
 // peerAtSameAddr returns the name of an existing peer whose URL points at the
 // same host:port as rawURL, or "" if none. Used to suppress duplicate announces
 // from a node that advertises under a different name than the one you gave it.
@@ -1050,27 +1076,11 @@ func (s *server) peerAtSameAddr(rawURL string) (string, error) {
 	return "", nil
 }
 
-// normalizeAddr reduces a URL to a lowercase "host:port", filling in the default
-// port for the scheme, so two URLs that differ only cosmetically (case, implicit
-// port) compare equal. Returns ok=false when the URL has no usable host.
+// normalizeAddr reduces a URL to a comparable "host:port". It delegates to
+// cluster.NormalizeAddr so the server's announce dedup and the poller's gossip
+// dedup share one definition of "same address".
 func normalizeAddr(rawURL string) (string, bool) {
-	u, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil {
-		return "", false
-	}
-	host := strings.ToLower(u.Hostname())
-	if host == "" {
-		return "", false
-	}
-	port := u.Port()
-	if port == "" {
-		if u.Scheme == "https" {
-			port = "443"
-		} else {
-			port = "80"
-		}
-	}
-	return host + ":" + port, true
+	return cluster.NormalizeAddr(rawURL)
 }
 
 // alertCoordMsg is the body for the alert-claim / alert-sent peer endpoints.

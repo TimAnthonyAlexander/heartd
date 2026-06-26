@@ -130,6 +130,27 @@ func (db *DB) SetPeerEnabled(name string, enabled bool) error {
 	return nil
 }
 
+// CommonSecret returns the most frequently used non-empty peer secret, or "" if
+// no peer has a secret. It is the fallback used to authenticate to gossip-
+// discovered peers — which arrive with no per-link secret — in the common case
+// where a cluster shares one secret across all its links. Ties break on the
+// lexicographically smaller secret so the result is deterministic.
+func CommonSecret(peers []Peer) string {
+	counts := make(map[string]int)
+	for _, p := range peers {
+		if p.Secret != "" {
+			counts[p.Secret]++
+		}
+	}
+	best, bestN := "", 0
+	for s, n := range counts {
+		if n > bestN || (n == bestN && s < best) {
+			best, bestN = s, n
+		}
+	}
+	return best
+}
+
 // scanPeers reads all rows into Peer values. Callers own closing rows.
 func scanPeers(rows *sql.Rows) ([]Peer, error) {
 	var out []Peer
