@@ -19,6 +19,7 @@ type peerDTO struct {
 	LastSeen  string `json:"last_seen"` // RFC3339, empty if never seen
 	LastError string `json:"last_error"`
 	HasSecret bool   `json:"has_secret"`
+	Muted     bool   `json:"muted"`
 }
 
 func toPeerDTO(p storage.Peer) peerDTO {
@@ -37,15 +38,18 @@ func toPeerDTO(p storage.Peer) peerDTO {
 		LastSeen:  lastSeen,
 		LastError: p.LastError,
 		HasSecret: p.Secret != "",
+		Muted:     !p.Enabled,
 	}
 }
 
 // peerInput is the JSON body for creating or updating a peer. On update, an empty
-// Secret leaves the stored secret unchanged.
+// Secret leaves the stored secret unchanged. Muted=true mutes the peer from this
+// node's perspective (not polled, not alerted on, grayed out).
 type peerInput struct {
 	Name   string `json:"name"`
 	URL    string `json:"url"`
 	Secret string `json:"secret"`
+	Muted  bool   `json:"muted"`
 }
 
 func (s *server) handleListPeers(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +89,10 @@ func (s *server) handleCreatePeer(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	if err := s.cfg.DB.SetPeerEnabled(in.Name, !in.Muted); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
 	peer, _, _ := s.cfg.DB.GetPeer(in.Name)
 	writeJSON(w, http.StatusOK, toPeerDTO(peer))
 }
@@ -116,6 +124,10 @@ func (s *server) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 
 	// UpsertPeer leaves the secret unchanged when the incoming secret is empty.
 	if err := s.cfg.DB.UpsertPeer(storage.Peer{Name: name, URL: in.URL, Secret: in.Secret}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := s.cfg.DB.SetPeerEnabled(name, !in.Muted); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

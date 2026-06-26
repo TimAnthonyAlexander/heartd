@@ -68,6 +68,9 @@ export function useCluster(): ClusterState {
     }
   }, [nonce])
 
-  const up = nodes.filter((n) => n.status === 'ok' || n.local).length
-  return { nodes, cpuByNode, summary: { up, total: nodes.length }, ready, reload }
+  // Muted peers are ignored from this node's perspective, so they don't count
+  // toward the cluster up/total summary.
+  const counted = nodes.filter((n) => !n.muted)
+  const up = counted.filter((n) => n.status === 'ok' || n.local).length
+  return { nodes, cpuByNode, summary: { up, total: counted.length }, ready, reload }
 }

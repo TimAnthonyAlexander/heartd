@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import {
+  Box,
   Button,
   Dialog,
   DialogActions,
@@ -11,22 +12,33 @@ import {
 } from '@mui/material'
 import { createPeer, updatePeer } from '../api'
 import { colors } from '../theme'
+import { Toggle } from './Toggle'
 
 interface Props {
   open: boolean
   mode: 'add' | 'edit'
   initialName?: string
   initialUrl?: string
+  initialMuted?: boolean
   onClose: () => void
   onSaved: () => void
 }
 
-// NodeDialog adds a new peer node or edits an existing one's URL/secret. The name
-// is the identity key, so it's only editable when adding.
-export function NodeDialog({ open, mode, initialName = '', initialUrl = '', onClose, onSaved }: Props) {
+// NodeDialog adds a new peer node or edits an existing one's URL/secret/muted
+// state. The name is the identity key, so it's only editable when adding.
+export function NodeDialog({
+  open,
+  mode,
+  initialName = '',
+  initialUrl = '',
+  initialMuted = false,
+  onClose,
+  onSaved,
+}: Props) {
   const [name, setName] = useState(initialName)
   const [url, setUrl] = useState(initialUrl)
   const [secret, setSecret] = useState('')
+  const [muted, setMuted] = useState(initialMuted)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -37,9 +49,9 @@ export function NodeDialog({ open, mode, initialName = '', initialUrl = '', onCl
     setSaving(true)
     try {
       if (isEdit) {
-        await updatePeer(initialName, url.trim(), secret)
+        await updatePeer(initialName, url.trim(), secret, muted)
       } else {
-        await createPeer({ name: name.trim(), url: url.trim(), secret })
+        await createPeer({ name: name.trim(), url: url.trim(), secret, muted })
       }
       onSaved()
       onClose()
@@ -87,6 +99,21 @@ export function NodeDialog({ open, mode, initialName = '', initialUrl = '', onCl
             autoComplete="new-password"
             fullWidth
           />
+
+          <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, pt: 0.5 }}>
+            <Toggle checked={muted} onChange={setMuted} aria-label="Muted" />
+            <Box>
+              <Typography sx={{ fontSize: 13, fontWeight: 600, color: colors.text }}>
+                Muted
+              </Typography>
+              <Typography sx={{ fontSize: 12.5, color: colors.textFaint, mt: 0.25 }}>
+                Stop polling this node, don't alert on it, and gray it out here. Use
+                this when this node can't reach it (e.g. a laptop behind NAT). Its own
+                dashboard is unaffected.
+              </Typography>
+            </Box>
+          </Box>
+
           {error && (
             <Typography sx={{ fontSize: 13, color: colors.error }}>{error}</Typography>
           )}

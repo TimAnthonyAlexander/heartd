@@ -6,6 +6,7 @@ export interface Node {
   name: string
   local: boolean
   status: NodeStatus
+  muted: boolean
 }
 
 export interface Metrics {
@@ -147,12 +148,14 @@ export interface PeerInfo {
   last_seen: string
   last_error: string
   has_secret: boolean
+  muted: boolean
 }
 
 export interface PeerInput {
   name: string
   url: string
   secret: string
+  muted: boolean
 }
 
 export function fetchPeers(signal?: AbortSignal): Promise<PeerInfo[]> {
@@ -163,10 +166,15 @@ export function createPeer(p: PeerInput): Promise<PeerInfo> {
   return postJSON<PeerInfo>('/api/peers', p)
 }
 
-// updatePeer sends url and (optionally) a new secret; a blank secret keeps the
-// stored one. The name is the identity key and cannot be changed.
-export function updatePeer(name: string, url: string, secret: string): Promise<PeerInfo> {
-  return putJSON<PeerInfo>(`/api/peers/${encodeURIComponent(name)}`, { url, secret })
+// updatePeer sends url, muted, and (optionally) a new secret; a blank secret
+// keeps the stored one. The name is the identity key and cannot be changed.
+export function updatePeer(
+  name: string,
+  url: string,
+  secret: string,
+  muted: boolean,
+): Promise<PeerInfo> {
+  return putJSON<PeerInfo>(`/api/peers/${encodeURIComponent(name)}`, { url, secret, muted })
 }
 
 export function deletePeer(name: string): Promise<{ status: string }> {

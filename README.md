@@ -284,6 +284,33 @@ binary swap.
 Useful flags: `--binary PATH`, `--version TAG`, `--port`, `--no-start`,
 `--no-backup`, `--yes`.
 
+### Headless agents
+
+Run a box as a pure **agent**: no dashboard, no nginx, no TLS, no DNS. It serves
+only `/api/health` and the secret-protected peer API on plain `IP:port`, and you
+manage everything about it (checks, alerts, notifications) from your **HQ** node's
+dashboard.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/install.sh \
+  | sudo bash -s -- --headless --secret <SHARED_SECRET>
+```
+
+This installs a systemd service bound to `0.0.0.0:9300`, writes a headless config
+(`headless: true` + `peer_secret`), skips the nginx/firewall steps, and **prints
+exactly what to add on your HQ**. Then on the HQ dashboard click **+ Add node**
+with `http://<agent-ip>:9300` and the same secret — and configure its checks and
+alerts remotely (those edits proxy to the agent). Omit `--secret` and the
+installer generates one and prints it; reuse that one secret across the fleet.
+
+- **Topology:** the **HQ polls the agents**, so the HQ works even behind NAT (e.g.
+  your laptop), while agents just need a reachable IP. You can also flip any node
+  headless by hand with `headless: true` + `peer_secret` in its `heartd.yaml`.
+- **Security:** the peer API is plain HTTP, so over the public internet the shared
+  secret and metrics travel **unencrypted**. Prefer a private network or a mesh
+  VPN (Tailscale/WireGuard) between HQ and agents; otherwise you're trading wire
+  security for skipping certs. Make sure the agent's port is reachable from the HQ.
+
 heartd serves plain HTTP on localhost; terminate TLS at your reverse proxy. If you
 prefer to wire systemd by hand, a unit template also lives at
 [`deploy/heartd.service`](./deploy/heartd.service). No Docker or external database

@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS peer (
     secret     TEXT NOT NULL DEFAULT '',
     status     TEXT NOT NULL DEFAULT 'unknown',
     last_seen  INTEGER NOT NULL DEFAULT 0,
-    last_error TEXT NOT NULL DEFAULT ''
+    last_error TEXT NOT NULL DEFAULT '',
+    enabled    INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS disk_status (
     node    TEXT NOT NULL,
@@ -149,7 +150,59 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("storage: ensure schema: %w", err)
 	}
 
+	// Column additions to existing tables (CREATE TABLE IF NOT EXISTS won't add
+	// them to a database created by an earlier version).
+	if err := ensureColumns(conn); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+
 	return &DB{conn: conn}, nil
+}
+
+// ensureColumns applies idempotent ADD COLUMN migrations for columns introduced
+// after a table's initial release.
+func ensureColumns(conn *sql.DB) error {
+	type col struct{ table, name, def string }
+	migrations := []col{
+		{"peer", "enabled", "INTEGER NOT NULL DEFAULT 1"},
+	}
+	for _, m := range migrations {
+		has, err := hasColumn(conn, m.table, m.name)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := conn.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s;", m.table, m.name, m.def)); err != nil {
+			return fmt.Errorf("storage: add %s.%s: %w", m.table, m.name, err)
+		}
+	}
+	return nil
+}
+
+// hasColumn reports whether table has a column named col.
+func hasColumn(conn *sql.DB, table, col string) (bool, error) {
+	rows, err := conn.Query("PRAGMA table_info(" + table + ");")
+	if err != nil {
+		return false, fmt.Errorf("storage: table_info(%s): %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid, notnull, pk int
+			name, ctype      string
+			dflt             sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Close closes the underlying connection.

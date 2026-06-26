@@ -17,6 +17,14 @@ server:
   advertise_url: http://web-01.internal:9300
   peer_poll_interval: 15s   # how often configured peers are polled
 
+  # Headless AGENT mode (optional). When true, this node serves ONLY /api/health
+  # and the secret-protected peer API — no dashboard, no login. Manage it (checks,
+  # alerts, notify) remotely from another node's dashboard. Bind it to a reachable
+  # address (e.g. run with -addr 0.0.0.0:9300) so your HQ can poll it.
+  # headless: true
+  # peer_secret: change-me-shared-secret   # accept node-to-node calls bearing this
+                                            # secret WITHOUT listing the caller in peers
+
 # Authentication is built in and always on: on first launch the dashboard prompts
 # you to create an admin account, and the API returns nothing until you sign in.
 # No auth configuration is needed here. (For public exposure, terminate TLS at a

@@ -109,6 +109,9 @@ func (r *Runner) evalRule(rule storage.AlertRule, seed bool, now time.Time) {
 	case settings.SourcePeer:
 		peers, _ := r.db.ListPeers()
 		for _, p := range peers {
+			if !p.Enabled {
+				continue // muted peers are not alerted on
+			}
 			if rule.Entity != "*" && rule.Entity != p.Name {
 				continue
 			}
@@ -122,6 +125,9 @@ func (r *Runner) evalRule(rule storage.AlertRule, seed bool, now time.Time) {
 	case settings.SourceNoData:
 		peers, _ := r.db.ListPeers()
 		for _, p := range peers {
+			if !p.Enabled {
+				continue // muted peers are not alerted on
+			}
 			if rule.Entity != "*" && rule.Entity != p.Name {
 				continue
 			}

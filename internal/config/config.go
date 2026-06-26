@@ -104,6 +104,14 @@ type Server struct {
 	DBPath          string     `yaml:"db_path"`          // sqlite file path; default "heartd.db"
 	AdvertiseURL    string     `yaml:"advertise_url"`    // how peers should reach this node (optional)
 	PeerPollInterval Duration  `yaml:"peer_poll_interval"` // how often to poll peers; default 15s
+	// Headless runs the node as an agent: it serves ONLY /api/health and the
+	// secret-protected /api/peer/* API (no dashboard, no login, no user
+	// endpoints). Configure it remotely from another node ("HQ").
+	Headless   bool   `yaml:"headless"`
+	// PeerSecret is an accepted node-to-node shared secret. It lets this node
+	// accept calls from a peer (poll + remote config) WITHOUT listing that peer
+	// in `peers:` — handy for a headless agent that is polled but polls no one.
+	PeerSecret string `yaml:"peer_secret"`
 }
 
 // Peer describes another heartd node.

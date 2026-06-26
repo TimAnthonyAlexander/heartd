@@ -18,7 +18,7 @@ interface Props {
 
 type DialogState =
   | { mode: 'add' }
-  | { mode: 'edit'; name: string; url: string }
+  | { mode: 'edit'; name: string; url: string; muted: boolean }
   | null
 
 export function Sidebar({ nodes, cpuByNode, summary, selected, onSelect, onChanged }: Props) {
@@ -32,7 +32,7 @@ export function Sidebar({ nodes, cpuByNode, summary, selected, onSelect, onChang
     try {
       const peers = await fetchPeers()
       const peer = peers.find((p) => p.name === name)
-      setDialog({ mode: 'edit', name, url: peer?.url ?? '' })
+      setDialog({ mode: 'edit', name, url: peer?.url ?? '', muted: peer?.muted ?? false })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load node')
     }
@@ -83,7 +83,7 @@ export function Sidebar({ nodes, cpuByNode, summary, selected, onSelect, onChang
       <Box sx={{ overflowY: 'auto', px: 1.5, pb: 2, flex: 1 }}>
         {nodes.map((node) => {
           const isSel = node.name === selected
-          const dot = statusColor(node.status)
+          const dot = node.muted ? colors.textFaint : statusColor(node.status)
           return (
             <Box
               key={node.name}
@@ -93,7 +93,7 @@ export function Sidebar({ nodes, cpuByNode, summary, selected, onSelect, onChang
                 mb: 0.5,
                 borderRadius: 2,
                 cursor: 'pointer',
-                opacity: busy === node.name ? 0.5 : 1,
+                opacity: busy === node.name ? 0.5 : node.muted ? 0.5 : 1,
                 bgcolor: isSel ? colors.panel : 'transparent',
                 border: `1px solid ${isSel ? colors.border : 'transparent'}`,
                 transition: 'background-color 120ms',
@@ -109,10 +109,16 @@ export function Sidebar({ nodes, cpuByNode, summary, selected, onSelect, onChang
                 {node.local ? (
                   <Typography sx={{ fontSize: 11, color: colors.textFaint }}>local</Typography>
                 ) : (
-                  <Box
-                    className="node-actions"
-                    sx={{ display: 'flex', gap: 0.25, opacity: 0, transition: 'opacity 120ms' }}
-                  >
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    {node.muted && (
+                      <Typography sx={{ fontSize: 10.5, color: colors.textFaint, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        muted
+                      </Typography>
+                    )}
+                    <Box
+                      className="node-actions"
+                      sx={{ display: 'flex', gap: 0.25, opacity: 0, transition: 'opacity 120ms' }}
+                    >
                     <Tooltip title="Edit">
                       <IconButton
                         size="small"
@@ -141,6 +147,7 @@ export function Sidebar({ nodes, cpuByNode, summary, selected, onSelect, onChang
                         </Box>
                       </IconButton>
                     </Tooltip>
+                    </Box>
                   </Box>
                 )}
               </Box>
@@ -184,6 +191,7 @@ export function Sidebar({ nodes, cpuByNode, summary, selected, onSelect, onChang
           mode={dialog.mode}
           initialName={dialog.mode === 'edit' ? dialog.name : ''}
           initialUrl={dialog.mode === 'edit' ? dialog.url : ''}
+          initialMuted={dialog.mode === 'edit' ? dialog.muted : false}
           onClose={() => setDialog(null)}
           onSaved={onChanged}
         />

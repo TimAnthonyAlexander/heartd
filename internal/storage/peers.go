@@ -14,6 +14,7 @@ type Peer struct {
 	Status    string    // "ok" | "down" | "unknown"
 	LastSeen  time.Time // last successful contact; zero value when never seen
 	LastError string    // last poll error; "" when none
+	Enabled   bool      // false = muted: not polled, not alerted on, grayed out
 }
 
 // UpsertPeer inserts a peer by Name, or updates its URL and (only if the
@@ -37,7 +38,7 @@ ON CONFLICT(name) DO UPDATE SET
 // GetPeer returns the named peer, or ok=false if no such peer exists.
 func (db *DB) GetPeer(name string) (Peer, bool, error) {
 	const q = `
-SELECT name, url, secret, status, last_seen, last_error
+SELECT name, url, secret, status, last_seen, last_error, enabled
 FROM peer
 WHERE name = ?;`
 	rows, err := db.conn.Query(q, name)
@@ -80,7 +81,7 @@ func (db *DB) DeleteNodeData(name string) error {
 // time.Time when the stored last_seen is 0.
 func (db *DB) ListPeers() ([]Peer, error) {
 	const q = `
-SELECT name, url, secret, status, last_seen, last_error
+SELECT name, url, secret, status, last_seen, last_error, enabled
 FROM peer
 ORDER BY name ASC;`
 	rows, err := db.conn.Query(q)
@@ -120,6 +121,15 @@ WHERE name = ?;`
 	return nil
 }
 
+// SetPeerEnabled toggles a peer's muted state (enabled=false). No-op if the peer
+// does not exist.
+func (db *DB) SetPeerEnabled(name string, enabled bool) error {
+	if _, err := db.conn.Exec(`UPDATE peer SET enabled = ? WHERE name = ?;`, boolToInt(enabled), name); err != nil {
+		return fmt.Errorf("storage: set peer enabled for %q: %w", name, err)
+	}
+	return nil
+}
+
 // scanPeers reads all rows into Peer values. Callers own closing rows.
 func scanPeers(rows *sql.Rows) ([]Peer, error) {
 	var out []Peer
@@ -127,15 +137,17 @@ func scanPeers(rows *sql.Rows) ([]Peer, error) {
 		var (
 			p        Peer
 			lastSeen int64
+			enabled  int64
 		)
 		if err := rows.Scan(
-			&p.Name, &p.URL, &p.Secret, &p.Status, &lastSeen, &p.LastError,
+			&p.Name, &p.URL, &p.Secret, &p.Status, &lastSeen, &p.LastError, &enabled,
 		); err != nil {
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
 		if lastSeen != 0 {
 			p.LastSeen = time.Unix(lastSeen, 0).UTC()
 		}
+		p.Enabled = enabled != 0
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {

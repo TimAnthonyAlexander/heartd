@@ -112,14 +112,22 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
-// peers returns the current peer list from storage (the source of truth).
+// peers returns the current ENABLED peer list from storage. Muted peers are
+// skipped for polling and announcing (they remain in the DB so their shared
+// secret still authenticates inbound node-to-node requests).
 func (p *Poller) peers() []storage.Peer {
 	peers, err := p.db.ListPeers()
 	if err != nil {
 		log.Printf("cluster: list peers failed: %v", err)
 		return nil
 	}
-	return peers
+	out := peers[:0]
+	for _, peer := range peers {
+		if peer.Enabled {
+			out = append(out, peer)
+		}
+	}
+	return out
 }
 
 // announceAll tells each known peer about this node (best-effort).

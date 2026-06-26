@@ -33,6 +33,12 @@ type Config struct {
 	// Engine is the alert engine, used to forget a node's state when it is
 	// removed. May be nil when alerting is disabled.
 	Engine *alert.Engine
+	// Headless serves only /api/health + /api/peer/* (no dashboard / auth / user
+	// endpoints) — the node is an agent managed from another node.
+	Headless bool
+	// ExtraSecrets are accepted node-to-node shared secrets beyond those derived
+	// from configured peers (e.g. a headless agent's `peer_secret`).
+	ExtraSecrets []string
 }
 
 // New builds the root HTTP handler: REST API under /api and the embedded
@@ -44,8 +50,59 @@ func New(cfg Config) http.Handler {
 	}
 	mux := http.NewServeMux()
 
-	// Public: liveness and the auth flow (you must reach these unauthenticated).
+	// Liveness is always public.
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+
+	// The dashboard, auth flow, and session-protected endpoints are skipped in
+	// headless (agent) mode — only health and the node-to-node /api/peer/* API
+	// below are served, so the node is configured remotely from another node.
+	if !cfg.Headless {
+		s.registerDashboardRoutes(mux)
+	}
+
+	// Node-to-node endpoints, protected by the shared secret. Always served (this
+	// is the only API surface in headless mode).
+	mux.Handle("POST /api/peer/announce", s.requireSecret(http.HandlerFunc(s.handlePeerAnnounce)))
+	mux.Handle("GET /api/peer/metrics", s.requireSecret(http.HandlerFunc(s.handlePeerMetrics)))
+	mux.Handle("GET /api/peer/checks", s.requireSecret(http.HandlerFunc(s.handlePeerChecks)))
+	mux.Handle("GET /api/peer/disk", s.requireSecret(http.HandlerFunc(s.handlePeerDisk)))
+	mux.Handle("GET /api/peer/network", s.requireSecret(http.HandlerFunc(s.handlePeerNetwork)))
+
+	// Node-to-node settings: the receive side of the proxy above. Same handlers
+	// the local node uses, operating on THIS node's own settings service.
+	mux.Handle("GET /api/peer/settings", s.requireSecret(http.HandlerFunc(s.handleGetSettings)))
+	mux.Handle("PUT /api/peer/settings/general", s.requireSecret(http.HandlerFunc(s.handlePutGeneral)))
+	mux.Handle("PUT /api/peer/settings/notify", s.requireSecret(http.HandlerFunc(s.handlePutNotify)))
+	mux.Handle("POST /api/peer/settings/notify/test", s.requireSecret(http.HandlerFunc(s.handleTestNotify)))
+	mux.Handle("POST /api/peer/settings/checks", s.requireSecret(http.HandlerFunc(s.handleCreateCheck)))
+	mux.Handle("PUT /api/peer/settings/checks/{id}", s.requireSecret(http.HandlerFunc(s.handleUpdateCheck)))
+	mux.Handle("DELETE /api/peer/settings/checks/{id}", s.requireSecret(http.HandlerFunc(s.handleDeleteCheck)))
+	mux.Handle("POST /api/peer/settings/alerts", s.requireSecret(http.HandlerFunc(s.handleCreateAlert)))
+	mux.Handle("PUT /api/peer/settings/alerts/{id}", s.requireSecret(http.HandlerFunc(s.handleUpdateAlert)))
+	mux.Handle("DELETE /api/peer/settings/alerts/{id}", s.requireSecret(http.HandlerFunc(s.handleDeleteAlert)))
+
+	// Unknown API paths return JSON 404 rather than falling through to the
+	// SPA handler (which would serve index.html with a 200).
+	mux.HandleFunc("/api/", handleAPINotFound)
+
+	if cfg.Headless {
+		// No dashboard in agent mode; a friendly note for humans hitting the port.
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = io.WriteString(w, "heartd — headless agent. No dashboard on this node; manage it from another node.\n")
+		})
+	} else {
+		// Everything not under /api is the dashboard.
+		mux.Handle("/", web.Handler())
+	}
+
+	return mux
+}
+
+// registerDashboardRoutes wires the auth flow, the embedded dashboard's data
+// endpoints, and the management API. Skipped in headless mode.
+func (s *server) registerDashboardRoutes(mux *http.ServeMux) {
+	// Public auth flow.
 	mux.HandleFunc("GET /api/auth/status", s.handleAuthStatus)
 	mux.HandleFunc("POST /api/auth/init", s.handleAuthInit)
 	mux.HandleFunc("POST /api/auth/login", s.handleAuthLogin)
@@ -78,8 +135,7 @@ func New(cfg Config) http.Handler {
 
 	// Runtime configuration, addressed per node. For the local node these operate
 	// on its own settings service; for a peer they proxy the same request to that
-	// peer's /api/peer/settings/* over the shared-secret link, so each node owns
-	// its own config but is editable from any dashboard.
+	// peer's /api/peer/settings/* over the shared-secret link.
 	protect("GET /api/nodes/{name}/settings", s.dispatchNode(s.handleGetSettings, "/api/peer/settings"))
 	protect("PUT /api/nodes/{name}/settings/general", s.dispatchNode(s.handlePutGeneral, "/api/peer/settings/general"))
 	protect("PUT /api/nodes/{name}/settings/notify", s.dispatchNode(s.handlePutNotify, "/api/peer/settings/notify"))
@@ -90,35 +146,6 @@ func New(cfg Config) http.Handler {
 	protect("POST /api/nodes/{name}/settings/alerts", s.dispatchNode(s.handleCreateAlert, "/api/peer/settings/alerts"))
 	protect("PUT /api/nodes/{name}/settings/alerts/{id}", s.dispatchNode(s.handleUpdateAlert, "/api/peer/settings/alerts"))
 	protect("DELETE /api/nodes/{name}/settings/alerts/{id}", s.dispatchNode(s.handleDeleteAlert, "/api/peer/settings/alerts"))
-
-	// Node-to-node endpoints, protected by the shared secret.
-	mux.Handle("POST /api/peer/announce", s.requireSecret(http.HandlerFunc(s.handlePeerAnnounce)))
-	mux.Handle("GET /api/peer/metrics", s.requireSecret(http.HandlerFunc(s.handlePeerMetrics)))
-	mux.Handle("GET /api/peer/checks", s.requireSecret(http.HandlerFunc(s.handlePeerChecks)))
-	mux.Handle("GET /api/peer/disk", s.requireSecret(http.HandlerFunc(s.handlePeerDisk)))
-	mux.Handle("GET /api/peer/network", s.requireSecret(http.HandlerFunc(s.handlePeerNetwork)))
-
-	// Node-to-node settings: the receive side of the proxy above. Same handlers
-	// the local node uses, operating on THIS node's own settings service.
-	mux.Handle("GET /api/peer/settings", s.requireSecret(http.HandlerFunc(s.handleGetSettings)))
-	mux.Handle("PUT /api/peer/settings/general", s.requireSecret(http.HandlerFunc(s.handlePutGeneral)))
-	mux.Handle("PUT /api/peer/settings/notify", s.requireSecret(http.HandlerFunc(s.handlePutNotify)))
-	mux.Handle("POST /api/peer/settings/notify/test", s.requireSecret(http.HandlerFunc(s.handleTestNotify)))
-	mux.Handle("POST /api/peer/settings/checks", s.requireSecret(http.HandlerFunc(s.handleCreateCheck)))
-	mux.Handle("PUT /api/peer/settings/checks/{id}", s.requireSecret(http.HandlerFunc(s.handleUpdateCheck)))
-	mux.Handle("DELETE /api/peer/settings/checks/{id}", s.requireSecret(http.HandlerFunc(s.handleDeleteCheck)))
-	mux.Handle("POST /api/peer/settings/alerts", s.requireSecret(http.HandlerFunc(s.handleCreateAlert)))
-	mux.Handle("PUT /api/peer/settings/alerts/{id}", s.requireSecret(http.HandlerFunc(s.handleUpdateAlert)))
-	mux.Handle("DELETE /api/peer/settings/alerts/{id}", s.requireSecret(http.HandlerFunc(s.handleDeleteAlert)))
-
-	// Unknown API paths return JSON 404 rather than falling through to the
-	// SPA handler (which would serve index.html with a 200).
-	mux.HandleFunc("/api/", handleAPINotFound)
-
-	// Everything not under /api is the dashboard.
-	mux.Handle("/", web.Handler())
-
-	return mux
 }
 
 type server struct {
@@ -218,6 +245,7 @@ type node struct {
 	Name   string `json:"name"`
 	Local  bool   `json:"local"`
 	Status string `json:"status"` // ok | down | unknown
+	Muted  bool   `json:"muted"`  // peer muted from this node's perspective
 }
 
 // handleNodes returns the local node plus all known peers with their current
@@ -235,7 +263,7 @@ func (s *server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		if status == "" {
 			status = "unknown"
 		}
-		out = append(out, node{Name: p.Name, Local: false, Status: status})
+		out = append(out, node{Name: p.Name, Local: false, Status: status, Muted: !p.Enabled})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -671,6 +699,16 @@ func (s *server) validSecret(presented string) bool {
 			continue
 		}
 		if subtle.ConstantTimeCompare([]byte(presented), []byte(peer.Secret)) == 1 {
+			ok = true
+		}
+	}
+	// Also accept any statically-configured secrets (e.g. a headless agent's
+	// peer_secret), so an agent can be polled without listing a peer it polls.
+	for _, secret := range s.cfg.ExtraSecrets {
+		if secret == "" {
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(presented), []byte(secret)) == 1 {
 			ok = true
 		}
 	}

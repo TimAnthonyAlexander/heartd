@@ -25,14 +25,15 @@ import (
 func main() {
 	configPath := flag.String("config", "heartd.yaml", "path to heartd.yaml")
 	addr := flag.String("addr", "", "address to listen on (overrides config port)")
+	headless := flag.Bool("headless", false, "run as a headless agent: no dashboard, only /api/health + /api/peer/*")
 	flag.Parse()
 
-	if err := run(*configPath, *addr); err != nil {
+	if err := run(*configPath, *addr, *headless); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(configPath, addrOverride string) error {
+func run(configPath, addrOverride string, headlessFlag bool) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -86,12 +87,20 @@ func run(configPath, addrOverride string) error {
 	authSvc := auth.NewService(db)
 	go pruneSessions(ctx, authSvc)
 
+	headless := cfg.Server.Headless || headlessFlag
+	var extraSecrets []string
+	if cfg.Server.PeerSecret != "" {
+		extraSecrets = append(extraSecrets, cfg.Server.PeerSecret)
+	}
+
 	handler := server.New(server.Config{
-		NodeName: cfg.Server.Name,
-		DB:       db,
-		Settings: set,
-		Auth:     authSvc,
-		Engine:   engine,
+		NodeName:     cfg.Server.Name,
+		DB:           db,
+		Settings:     set,
+		Auth:         authSvc,
+		Engine:       engine,
+		Headless:     headless,
+		ExtraSecrets: extraSecrets,
 	})
 	srv := &http.Server{
 		Addr:              addr,
@@ -107,8 +116,12 @@ func run(configPath, addrOverride string) error {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("heartd listening on %s (node %q, db %q, interval %s)",
-		addr, cfg.Server.Name, cfg.Server.DBPath, cfg.Server.MetricsInterval)
+	mode := "dashboard"
+	if headless {
+		mode = "headless agent"
+	}
+	log.Printf("heartd listening on %s (node %q, %s, db %q, interval %s)",
+		addr, cfg.Server.Name, mode, cfg.Server.DBPath, cfg.Server.MetricsInterval)
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server error: %w", err)
