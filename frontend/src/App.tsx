@@ -23,6 +23,17 @@ const TABS: TabItem<NodeTab>[] = [
   { value: 'settings', label: 'Settings' },
 ]
 
+function asTab(value: string | undefined): NodeTab {
+  return TABS.some((t) => t.value === value) ? (value as NodeTab) : 'dashboard'
+}
+
+// nodePath builds the URL for a node, omitting the segment for the default tab so
+// the dashboard stays at the clean /node/:name path.
+function nodePath(name: string, tab: NodeTab): string {
+  const base = `/node/${encodeURIComponent(name)}`
+  return tab === 'dashboard' ? base : `${base}/${tab}`
+}
+
 function formatGB(bytes: number): string {
   return (bytes / 1024 ** 3).toFixed(1)
 }
@@ -35,12 +46,16 @@ interface AppProps {
 export default function App({ username, onLogout }: AppProps) {
   const { nodes, cpuByNode, summary, ready, reload } = useCluster()
   const navigate = useNavigate()
-  const { name } = useParams()
+  const { name, tab: tabParam } = useParams()
   const selected = name ?? null
+  const tab = asTab(tabParam)
   const [rangeMinutes, setRangeMinutes] = useState(60)
   const [paused, setPaused] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [tab, setTab] = useState<NodeTab>('dashboard')
+
+  const goToTab = (t: NodeTab) => {
+    if (selected) navigate(nodePath(selected, t))
+  }
 
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
   const data = useNodeData(selected, rangeMinutes, paused)
@@ -66,7 +81,7 @@ export default function App({ username, onLogout }: AppProps) {
       summary={summary}
       selected={selected}
       onSelect={(n) => {
-        navigate(`/node/${encodeURIComponent(n)}`)
+        navigate(nodePath(n, tab))
         setDrawerOpen(false)
       }}
       onChanged={reload}
@@ -99,7 +114,7 @@ export default function App({ username, onLogout }: AppProps) {
         />
 
         <Box sx={{ px: { xs: 2, md: 4 }, pt: 2.5, pb: 0.5 }}>
-          <SegmentedTabs items={TABS} value={tab} onChange={setTab} />
+          <SegmentedTabs items={TABS} value={tab} onChange={goToTab} />
         </Box>
 
         {/* Left-aligned: the dashboard spreads wide for 4 panels per row; the

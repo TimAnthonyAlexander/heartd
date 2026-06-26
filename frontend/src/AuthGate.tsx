@@ -92,6 +92,7 @@ export function AuthGate() {
     <HashRouter>
       <Routes>
         <Route path="/settings" element={<SettingsRoute />} />
+        <Route path="/node/:name/:tab" element={<App username={username} onLogout={onLogout} />} />
         <Route path="/node/:name" element={<App username={username} onLogout={onLogout} />} />
         <Route path="/" element={<App username={username} onLogout={onLogout} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
