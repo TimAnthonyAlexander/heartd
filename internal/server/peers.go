@@ -159,10 +159,60 @@ func (s *server) handleDeletePeer(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	if err := s.cfg.DB.DeleteNodeAlias(name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
 	if s.cfg.Engine != nil {
 		s.cfg.Engine.ForgetNode(name)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// aliasInput is the JSON body for setting a node's UI display alias.
+type aliasInput struct {
+	Alias string `json:"alias"`
+}
+
+// handleSetNodeAlias sets or clears a node's display alias. The node's real name
+// remains the identity key everywhere (storage, routing, peer protocol); the
+// alias only changes how this dashboard labels it. Works for the local node and
+// for any known peer. A blank alias (or one equal to the real name) clears it.
+func (s *server) handleSetNodeAlias(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name != s.cfg.NodeName {
+		if _, ok, err := s.cfg.DB.GetPeer(name); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		} else if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown node"})
+			return
+		}
+	}
+
+	var in aliasInput
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	alias := strings.TrimSpace(in.Alias)
+	if len([]rune(alias)) > 64 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "display name must be 64 characters or fewer"})
+		return
+	}
+
+	if alias == "" || alias == name {
+		if err := s.cfg.DB.DeleteNodeAlias(name); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"alias": ""})
+		return
+	}
+	if err := s.cfg.DB.SetNodeAlias(name, alias); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"alias": alias})
 }
 
 // validatePeer returns an error message, or "" when the input is valid.

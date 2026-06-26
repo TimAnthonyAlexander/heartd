@@ -9,6 +9,8 @@ import { NetworkPanel } from './components/NetworkPanel'
 import { ChecksTable } from './components/ChecksTable'
 import { NodeConfig, type ConfigTab } from './components/NodeConfig'
 import { SegmentedTabs, type TabItem } from './components/SegmentedTabs'
+import { RenameDialog } from './components/RenameDialog'
+import { nodeLabel } from './api'
 import { useCluster } from './hooks/useCluster'
 import { useNodeData } from './hooks/useNodeData'
 import { colors, theme } from './theme'
@@ -52,6 +54,7 @@ export default function App({ username, onLogout }: AppProps) {
   const [rangeMinutes, setRangeMinutes] = useState(60)
   const [paused, setPaused] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [renaming, setRenaming] = useState(false)
 
   const goToTab = (t: NodeTab) => {
     if (selected) navigate(nodePath(selected, t))
@@ -72,6 +75,7 @@ export default function App({ username, onLogout }: AppProps) {
 
   const selectedNode = nodes.find((n) => n.name === selected) ?? null
   const status = selectedNode ? selectedNode.status : null
+  const displayName = selectedNode ? nodeLabel(selectedNode) : selected
   const m = data.metrics
 
   const sidebar = (
@@ -100,7 +104,7 @@ export default function App({ username, onLogout }: AppProps) {
 
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <TopBar
-          nodeName={selected}
+          nodeName={displayName}
           status={status}
           lastUpdated={data.lastUpdated}
           paused={paused}
@@ -111,6 +115,7 @@ export default function App({ username, onLogout }: AppProps) {
           username={username}
           onLogout={onLogout}
           onSettings={() => navigate('/settings')}
+          onRename={selectedNode ? () => setRenaming(true) : undefined}
         />
 
         <Box sx={{ px: { xs: 2, md: 4 }, pt: 2.5, pb: 0.5 }}>
@@ -135,7 +140,7 @@ export default function App({ username, onLogout }: AppProps) {
                     fontSize: 14,
                   }}
                 >
-                  {selected} is unreachable — showing last known values.
+                  {displayName} is unreachable — showing last known values.
                 </Box>
               )}
 
@@ -185,6 +190,15 @@ export default function App({ username, onLogout }: AppProps) {
           ) : null}
         </Box>
       </Box>
+
+      {renaming && selectedNode && (
+        <RenameDialog
+          open
+          node={selectedNode}
+          onClose={() => setRenaming(false)}
+          onRenamed={reload}
+        />
+      )}
     </Box>
   )
 }

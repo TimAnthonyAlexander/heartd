@@ -126,6 +126,10 @@ func (s *server) registerDashboardRoutes(mux *http.ServeMux) {
 	protect("DELETE /api/users/{username}", s.handleDeleteUser)
 	protect("PUT /api/users/{username}/password", s.handleSetUserPassword)
 
+	// Display alias (rename) — always applied locally in this node's DB, for the
+	// local node or any peer; never proxied (it relabels the node only here).
+	protect("PUT /api/nodes/{name}/alias", s.handleSetNodeAlias)
+
 	protect("GET /api/nodes/{name}/metrics", s.handleMetrics)
 	protect("GET /api/nodes/{name}/metrics/history", s.handleHistory)
 	protect("GET /api/nodes/{name}/checks", s.handleChecks)
@@ -243,6 +247,7 @@ func handleAPINotFound(w http.ResponseWriter, r *http.Request) {
 // node is the dashboard's view of a single heartd instance (local or peer).
 type node struct {
 	Name   string `json:"name"`
+	Alias  string `json:"alias,omitempty"` // UI display name; empty = use Name
 	Local  bool   `json:"local"`
 	Status string `json:"status"` // ok | down | unknown
 	Muted  bool   `json:"muted"`  // peer muted from this node's perspective
@@ -251,7 +256,12 @@ type node struct {
 // handleNodes returns the local node plus all known peers with their current
 // reachability, so each node's dashboard is a full cluster view.
 func (s *server) handleNodes(w http.ResponseWriter, r *http.Request) {
-	out := []node{{Name: s.cfg.NodeName, Local: true, Status: "ok"}}
+	aliases, err := s.cfg.DB.NodeAliases()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	out := []node{{Name: s.cfg.NodeName, Alias: aliases[s.cfg.NodeName], Local: true, Status: "ok"}}
 
 	peers, err := s.cfg.DB.ListPeers()
 	if err != nil {
@@ -263,7 +273,7 @@ func (s *server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		if status == "" {
 			status = "unknown"
 		}
-		out = append(out, node{Name: p.Name, Local: false, Status: status, Muted: !p.Enabled})
+		out = append(out, node{Name: p.Name, Alias: aliases[p.Name], Local: false, Status: status, Muted: !p.Enabled})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

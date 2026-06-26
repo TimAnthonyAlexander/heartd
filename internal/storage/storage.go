@@ -76,6 +76,10 @@ CREATE TABLE IF NOT EXISTS net_sample (
     at         INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_net_sample_node_at ON net_sample(node, at);
+CREATE TABLE IF NOT EXISTS node_alias (
+    node  TEXT PRIMARY KEY,
+    alias TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS user (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     username      TEXT NOT NULL UNIQUE,

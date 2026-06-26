@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Box, IconButton, Tooltip, Typography } from '@mui/material'
 import type { Node } from '../api'
-import { deletePeer, fetchPeers } from '../api'
+import { deletePeer, fetchPeers, nodeLabel } from '../api'
 import { colors, statusColor } from '../theme'
 import { Sparkline } from './Sparkline'
 import { NodeDialog } from './NodeDialog'
@@ -103,8 +103,12 @@ export function Sidebar({ nodes, cpuByNode, summary, selected, onSelect, onChang
             >
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: dot, flexShrink: 0 }} />
-                <Typography sx={{ fontSize: 14, fontWeight: 600, flex: 1 }} noWrap>
-                  {node.name}
+                <Typography
+                  sx={{ fontSize: 14, fontWeight: 600, flex: 1 }}
+                  noWrap
+                  title={node.alias ? node.name : undefined}
+                >
+                  {nodeLabel(node)}
                 </Typography>
                 {node.local ? (
                   <Typography sx={{ fontSize: 11, color: colors.textFaint }}>local</Typography>

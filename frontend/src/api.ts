@@ -4,9 +4,17 @@ export type NodeStatus = 'ok' | 'down' | 'unknown'
 
 export interface Node {
   name: string
+  // UI display name. The real `name` stays the identity key; `alias` only
+  // relabels the node in the dashboard. Empty/absent = show `name`.
+  alias?: string
   local: boolean
   status: NodeStatus
   muted: boolean
+}
+
+// nodeLabel is the name to show for a node: its alias when set, else its real name.
+export function nodeLabel(n: Pick<Node, 'name' | 'alias'>): string {
+  return n.alias && n.alias.trim() !== '' ? n.alias : n.name
 }
 
 export interface Metrics {
@@ -137,6 +145,13 @@ export function changeUserPassword(username: string, password: string): Promise<
 
 export function fetchNodes(signal?: AbortSignal): Promise<Node[]> {
   return getJSON<Node[]>('/api/nodes', signal)
+}
+
+// setNodeAlias sets (or clears, when alias is blank) a node's UI display name.
+// The node's real name stays the identity key; the alias only relabels it in
+// this dashboard. Works for the local node and any peer.
+export function setNodeAlias(name: string, alias: string): Promise<{ alias: string }> {
+  return putJSON<{ alias: string }>(`/api/nodes/${encodeURIComponent(name)}/alias`, { alias })
 }
 
 // ----- Cluster topology (peer management) -----
