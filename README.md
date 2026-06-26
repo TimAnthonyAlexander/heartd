@@ -222,9 +222,31 @@ just the file.
 
 ## Deployment (Linux)
 
-Two scripts handle a systemd install and in-place upgrades. Build a static binary
-first (`make cross` produces `bin/heartd-linux-amd64` / `-arm64`), then copy the
-repo (or just the script + binary) to the server.
+### One-liner install
+
+No clone, no build — this downloads the right release binary for your CPU and sets
+up a hardened systemd service:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/install.sh | sudo bash
+```
+
+Putting it behind a domain? Pass it through:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/install.sh \
+  | sudo bash -s -- --domain heartd.example.com
+```
+
+Upgrade later with the same idea (`--yes` since a piped script can't prompt):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/update.sh | sudo bash -s -- --yes
+```
+
+> The one-liner pulls a prebuilt binary from GitHub Releases. Prefer not to pipe
+> the internet into `sudo bash`? Read the script first, or use the explicit flow
+> below. Pin a version with `--version vX.Y.Z`.
 
 ### First install — [`install.sh`](./install.sh)
 
@@ -232,16 +254,20 @@ repo (or just the script + binary) to the server.
 sudo ./install.sh --domain heartd.example.com
 ```
 
-It installs the binary to `/usr/local/bin/heartd`, creates an unprivileged
-`heartd` system user, sets up `/etc/heartd` (config) and `/var/lib/heartd`
-(database), writes `/etc/heartd/heartd.yaml` **only if absent**, and installs a
-**hardened systemd unit bound to `127.0.0.1`** (so the port is never exposed
-directly). It then prints an nginx reverse-proxy + `certbot` snippet for you to
-add — it **never touches nginx or your firewall** without asking. Re-runnable and
-safe; uses `sudo` for privileged steps.
+It resolves a heartd binary (a local `bin/heartd-linux-<arch>` or `./heartd` if
+present, otherwise a download from GitHub Releases), installs it to
+`/usr/local/bin/heartd`, creates an unprivileged `heartd` system user, sets up
+`/etc/heartd` (config) and `/var/lib/heartd` (database), writes
+`/etc/heartd/heartd.yaml` **only if absent**, and installs a **hardened systemd
+unit bound to `127.0.0.1`** (so the port is never exposed directly). It then
+prints an nginx reverse-proxy + `certbot` snippet for you to add — it **never
+touches nginx or your firewall** without asking. Re-runnable and safe; uses `sudo`
+for privileged steps.
 
-Useful flags: `--binary PATH`, `--name`, `--port`, `--no-start`, `--force-config`,
-`--yes`, `--ufw`. Run `./install.sh --help` for the full list.
+Useful flags: `--binary PATH`, `--version TAG`, `--name`, `--port`, `--no-start`,
+`--force-config`, `--yes`, `--ufw`. Run `./install.sh --help` for the full list.
+(Building from source instead? `make cross` produces `bin/heartd-linux-amd64` /
+`-arm64`; the installer picks it up automatically.)
 
 ### Upgrades — [`update.sh`](./update.sh)
 
@@ -249,13 +275,15 @@ Useful flags: `--binary PATH`, `--name`, `--port`, `--no-start`, `--force-config
 sudo ./update.sh
 ```
 
-It resolves the new binary, **backs up** the current one, stops the service, swaps
-the binary, restarts, and **health-checks `/api/health`** — offering an automatic
-**rollback** if the new binary doesn't come back up. It touches **only the
-binary**: never your config, data, the systemd unit, nginx, or TLS. The embedded
-SQLite schema migrates itself on start, so upgrades are just a binary swap.
+It resolves the new binary (local or downloaded), **backs up** the current one,
+stops the service, swaps the binary, restarts, and **health-checks `/api/health`**
+— offering an automatic **rollback** if the new binary doesn't come back up. It
+touches **only the binary**: never your config, data, the systemd unit, nginx, or
+TLS. The embedded SQLite schema migrates itself on start, so upgrades are just a
+binary swap.
 
-Useful flags: `--binary PATH`, `--port`, `--no-start`, `--no-backup`, `--yes`.
+Useful flags: `--binary PATH`, `--version TAG`, `--port`, `--no-start`,
+`--no-backup`, `--yes`.
 
 heartd serves plain HTTP on localhost; terminate TLS at your reverse proxy. If you
 prefer to wire systemd by hand, a unit template also lives at

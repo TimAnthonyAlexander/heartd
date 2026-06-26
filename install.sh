@@ -2,8 +2,13 @@
 #
 # install.sh — install heartd as a systemd service on Linux.
 #
+# One-liner (downloads the latest release binary for your CPU, no clone needed):
+#   curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/install.sh | sudo bash -s -- --domain heartd.example.com
+#
 # What it does (each step is privileged via sudo when you aren't root):
-#   1. Installs a heartd binary to /usr/local/bin/heartd
+#   1. Installs a heartd binary to /usr/local/bin/heartd (a local one if present,
+#      otherwise downloaded from GitHub Releases for your architecture)
 #   2. Creates a dedicated, unprivileged `heartd` system user + group
 #   3. Creates /etc/heartd (config) and /var/lib/heartd (database)
 #   4. Writes /etc/heartd/heartd.yaml (only if absent — never clobbers yours)
@@ -19,7 +24,10 @@
 #
 # Options:
 #   --binary PATH     Path to a linux heartd binary to install. If omitted, the
-#                     script looks for ./bin/heartd-linux-<arch> then ./heartd.
+#                     script looks for ./bin/heartd-linux-<arch> then ./heartd,
+#                     and finally downloads it from GitHub Releases.
+#   --version TAG     Release tag to download (default: latest). E.g. v1.2.0.
+#   --repo OWNER/REPO GitHub repo to download from (default: timanthonyalexander/heartd).
 #   --name NAME       Node name shown in the dashboard (default: this hostname).
 #   --domain HOST     Public hostname (e.g. heartd.example.com). Used for the
 #                     printed nginx block and as advertise_url in a fresh config.
@@ -36,6 +44,8 @@ set -euo pipefail
 
 # ----- defaults -----
 BINARY=""
+VERSION="latest"
+REPO="timanthonyalexander/heartd"
 NODE_NAME=""
 DOMAIN=""
 PORT="9300"
@@ -43,6 +53,7 @@ FORCE_CONFIG="no"
 DO_START="yes"
 ASSUME_YES="no"
 ALLOW_UFW="no"
+DOWNLOADED="" # temp file to clean up if we downloaded the binary
 
 PREFIX_BIN="/usr/local/bin/heartd"
 CONFIG_DIR="/etc/heartd"
@@ -52,7 +63,9 @@ UNIT_FILE="/etc/systemd/system/heartd.service"
 SVC_USER="heartd"
 SVC_GROUP="heartd"
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve our own directory, tolerating `curl | bash` (no script file on disk).
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
+trap 'rm -f "${DOWNLOADED:-}"' EXIT
 
 # ----- pretty output -----
 c_blue() { printf '\033[1;34m%s\033[0m\n' "$*"; }
@@ -75,6 +88,14 @@ while [ $# -gt 0 ]; do
   case "$1" in
   --binary)
     BINARY="${2:-}"
+    shift 2
+    ;;
+  --version)
+    VERSION="${2:-}"
+    shift 2
+    ;;
+  --repo)
+    REPO="${2:-}"
     shift 2
     ;;
   --name)
@@ -140,14 +161,43 @@ aarch64 | arm64) ARCH="arm64" ;;
 *) die "unsupported architecture: $(uname -m) (heartd ships amd64 and arm64)." ;;
 esac
 
-# Resolve the binary to install.
+# download_binary fetches the release asset for this architecture into a temp
+# file and points BINARY at it. Used when no local binary is available (e.g. the
+# `curl | bash` one-liner).
+download_binary() {
+  local asset="heartd-linux-${ARCH}" url tmp
+  if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
+    url="https://github.com/${REPO}/releases/latest/download/${asset}"
+  else
+    url="https://github.com/${REPO}/releases/download/${VERSION}/${asset}"
+  fi
+
+  tmp="$(mktemp)" || die "could not create a temp file"
+  DOWNLOADED="$tmp"
+  c_blue "Downloading ${asset} (${VERSION:-latest})"
+  info "$url"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fSL --proto '=https' --tlsv1.2 -o "$tmp" "$url" ||
+      die "download failed. Is there a published '${asset}' asset for release '${VERSION}' at github.com/${REPO}? Otherwise build locally (make cross) and pass --binary."
+  elif command -v wget >/dev/null 2>&1; then
+    wget -O "$tmp" "$url" ||
+      die "download failed. Is there a published '${asset}' asset for release '${VERSION}' at github.com/${REPO}?"
+  else
+    die "need curl or wget to download the binary (or pass --binary PATH)."
+  fi
+  chmod +x "$tmp"
+  BINARY="$tmp"
+}
+
+# Resolve the binary to install: explicit --binary, then a local build, then a
+# download from GitHub Releases.
 if [ -z "$BINARY" ]; then
   if [ -x "${SCRIPT_DIR}/bin/heartd-linux-${ARCH}" ]; then
     BINARY="${SCRIPT_DIR}/bin/heartd-linux-${ARCH}"
   elif [ -x "${SCRIPT_DIR}/heartd" ]; then
     BINARY="${SCRIPT_DIR}/heartd"
   else
-    die "no binary found. Build one with 'make cross' and pass --binary bin/heartd-linux-${ARCH}, or place a 'heartd' binary next to this script."
+    download_binary
   fi
 fi
 [ -f "$BINARY" ] || die "binary not found: $BINARY"
