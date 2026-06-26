@@ -7,6 +7,8 @@ import { MetricPanel } from './components/MetricPanel'
 import { DiskPanel } from './components/DiskPanel'
 import { NetworkPanel } from './components/NetworkPanel'
 import { DiskIOPanel } from './components/DiskIOPanel'
+import { LoadPanel } from './components/LoadPanel'
+import { SwapPanel } from './components/SwapPanel'
 import { ChecksTable } from './components/ChecksTable'
 import { AlertsPanel } from './components/AlertsPanel'
 import { NodeConfig, type ConfigTab, type EditTarget } from './components/NodeConfig'
@@ -184,6 +186,21 @@ export default function App({ username, onLogout }: AppProps) {
                       headline={`${formatGB(m.mem_used)} / ${formatGB(m.mem_total)} GB`}
                       percent={m.mem_percent}
                       data={data.series.map((p) => ({ t: p.t, v: p.memPct }))}
+                      dimmed={data.unreachable}
+                    />
+                    {m.swap_total > 0 && (
+                      <SwapPanel
+                        used={m.swap_used}
+                        total={m.swap_total}
+                        percent={m.swap_percent}
+                        dimmed={data.unreachable}
+                      />
+                    )}
+                    <LoadPanel
+                      load1={m.load1}
+                      load5={m.load5}
+                      load15={m.load15}
+                      series={data.series}
                       dimmed={data.unreachable}
                     />
                   </>

@@ -310,6 +310,12 @@ func (s *server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 			MemUsed:     latest.MemUsed,
 			MemTotal:    latest.MemTotal,
 			MemPercent:  latest.MemPercent,
+			Load1:       latest.Load1,
+			Load5:       latest.Load5,
+			Load15:      latest.Load15,
+			SwapUsed:    latest.SwapUsed,
+			SwapTotal:   latest.SwapTotal,
+			SwapPercent: latest.SwapPercent,
 			CollectedAt: latest.At.UTC().Format(time.RFC3339),
 		})
 		return
@@ -333,11 +339,17 @@ func (s *server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 // historyPoint is one persisted sample, trimmed to what the sparklines need.
 type historyPoint struct {
-	CPUPercent float64 `json:"cpu_percent"`
-	MemUsed    uint64  `json:"mem_used"`
-	MemTotal   uint64  `json:"mem_total"`
-	MemPercent float64 `json:"mem_percent"`
-	At         string  `json:"at"`
+	CPUPercent  float64 `json:"cpu_percent"`
+	MemUsed     uint64  `json:"mem_used"`
+	MemTotal    uint64  `json:"mem_total"`
+	MemPercent  float64 `json:"mem_percent"`
+	Load1       float64 `json:"load1"`
+	Load5       float64 `json:"load5"`
+	Load15      float64 `json:"load15"`
+	SwapUsed    uint64  `json:"swap_used"`
+	SwapTotal   uint64  `json:"swap_total"`
+	SwapPercent float64 `json:"swap_percent"`
+	At          string  `json:"at"`
 }
 
 // handleHistory returns persisted samples for a node within a recent window.
@@ -357,11 +369,17 @@ func (s *server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	points := make([]historyPoint, 0, len(samples))
 	for _, m := range samples {
 		points = append(points, historyPoint{
-			CPUPercent: m.CPUPercent,
-			MemUsed:    m.MemUsed,
-			MemTotal:   m.MemTotal,
-			MemPercent: m.MemPercent,
-			At:         m.At.UTC().Format(time.RFC3339),
+			CPUPercent:  m.CPUPercent,
+			MemUsed:     m.MemUsed,
+			MemTotal:    m.MemTotal,
+			MemPercent:  m.MemPercent,
+			Load1:       m.Load1,
+			Load5:       m.Load5,
+			Load15:      m.Load15,
+			SwapUsed:    m.SwapUsed,
+			SwapTotal:   m.SwapTotal,
+			SwapPercent: m.SwapPercent,
+			At:          m.At.UTC().Format(time.RFC3339),
 		})
 	}
 	writeJSON(w, http.StatusOK, points)
@@ -966,6 +984,12 @@ func (s *server) handlePeerMetrics(w http.ResponseWriter, r *http.Request) {
 		MemUsed:     latest.MemUsed,
 		MemTotal:    latest.MemTotal,
 		MemPercent:  latest.MemPercent,
+		Load1:       latest.Load1,
+		Load5:       latest.Load5,
+		Load15:      latest.Load15,
+		SwapUsed:    latest.SwapUsed,
+		SwapTotal:   latest.SwapTotal,
+		SwapPercent: latest.SwapPercent,
 		CollectedAt: latest.At.UTC().Format(time.RFC3339),
 	})
 }

@@ -24,18 +24,32 @@ type MetricSample struct {
 	MemUsed    uint64
 	MemTotal   uint64
 	MemPercent float64
-	At         time.Time
+	// Load averages over 1/5/15 minutes (0 where the platform has no load avg).
+	Load1  float64
+	Load5  float64
+	Load15 float64
+	// Swap usage (SwapTotal is 0 on hosts without swap).
+	SwapUsed    uint64
+	SwapTotal   uint64
+	SwapPercent float64
+	At          time.Time
 }
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS metric_sample (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    node        TEXT NOT NULL,
-    cpu_percent REAL NOT NULL,
-    mem_used    INTEGER NOT NULL,
-    mem_total   INTEGER NOT NULL,
-    mem_percent REAL NOT NULL,
-    at          INTEGER NOT NULL
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    node         TEXT NOT NULL,
+    cpu_percent  REAL NOT NULL,
+    mem_used     INTEGER NOT NULL,
+    mem_total    INTEGER NOT NULL,
+    mem_percent  REAL NOT NULL,
+    load1        REAL NOT NULL DEFAULT 0,
+    load5        REAL NOT NULL DEFAULT 0,
+    load15       REAL NOT NULL DEFAULT 0,
+    swap_used    INTEGER NOT NULL DEFAULT 0,
+    swap_total   INTEGER NOT NULL DEFAULT 0,
+    swap_percent REAL NOT NULL DEFAULT 0,
+    at           INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_metric_sample_node_at ON metric_sample(node, at);
 CREATE TABLE IF NOT EXISTS check_status (
@@ -182,6 +196,12 @@ func ensureColumns(conn *sql.DB) error {
 	type col struct{ table, name, def string }
 	migrations := []col{
 		{"peer", "enabled", "INTEGER NOT NULL DEFAULT 1"},
+		{"metric_sample", "load1", "REAL NOT NULL DEFAULT 0"},
+		{"metric_sample", "load5", "REAL NOT NULL DEFAULT 0"},
+		{"metric_sample", "load15", "REAL NOT NULL DEFAULT 0"},
+		{"metric_sample", "swap_used", "INTEGER NOT NULL DEFAULT 0"},
+		{"metric_sample", "swap_total", "INTEGER NOT NULL DEFAULT 0"},
+		{"metric_sample", "swap_percent", "REAL NOT NULL DEFAULT 0"},
 	}
 	for _, m := range migrations {
 		has, err := hasColumn(conn, m.table, m.name)
@@ -232,8 +252,8 @@ func (db *DB) Close() error {
 // InsertMetric persists one sample.
 func (db *DB) InsertMetric(m MetricSample) error {
 	const q = `
-INSERT INTO metric_sample (node, cpu_percent, mem_used, mem_total, mem_percent, at)
-VALUES (?, ?, ?, ?, ?, ?);`
+INSERT INTO metric_sample (node, cpu_percent, mem_used, mem_total, mem_percent, load1, load5, load15, swap_used, swap_total, swap_percent, at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 	if _, err := db.conn.Exec(
 		q,
 		m.Node,
@@ -241,6 +261,12 @@ VALUES (?, ?, ?, ?, ?, ?);`
 		int64(m.MemUsed),
 		int64(m.MemTotal),
 		m.MemPercent,
+		m.Load1,
+		m.Load5,
+		m.Load15,
+		int64(m.SwapUsed),
+		int64(m.SwapTotal),
+		m.SwapPercent,
 		m.At.UTC().Unix(),
 	); err != nil {
 		return fmt.Errorf("storage: insert metric for node %q: %w", m.Node, err)
@@ -262,8 +288,8 @@ func (db *DB) RecentMetrics(node string, since time.Time, limit int) ([]MetricSa
 	if limit > 0 {
 		// Select the most-recent N rows in the window, then re-order ascending.
 		const q = `
-SELECT node, cpu_percent, mem_used, mem_total, mem_percent, at FROM (
-    SELECT id, node, cpu_percent, mem_used, mem_total, mem_percent, at
+SELECT node, cpu_percent, mem_used, mem_total, mem_percent, load1, load5, load15, swap_used, swap_total, swap_percent, at FROM (
+    SELECT id, node, cpu_percent, mem_used, mem_total, mem_percent, load1, load5, load15, swap_used, swap_total, swap_percent, at
     FROM metric_sample
     WHERE node = ? AND at >= ?
     ORDER BY at DESC, id DESC
@@ -273,7 +299,7 @@ ORDER BY at ASC, id ASC;`
 		rows, err = db.conn.Query(q, node, sinceUnix, limit)
 	} else {
 		const q = `
-SELECT node, cpu_percent, mem_used, mem_total, mem_percent, at
+SELECT node, cpu_percent, mem_used, mem_total, mem_percent, load1, load5, load15, swap_used, swap_total, swap_percent, at
 FROM metric_sample
 WHERE node = ? AND at >= ?
 ORDER BY at ASC, id ASC;`
@@ -295,20 +321,23 @@ ORDER BY at ASC, id ASC;`
 // (zero, false, nil) if none exists.
 func (db *DB) LatestMetric(node string) (MetricSample, bool, error) {
 	const q = `
-SELECT node, cpu_percent, mem_used, mem_total, mem_percent, at
+SELECT node, cpu_percent, mem_used, mem_total, mem_percent, load1, load5, load15, swap_used, swap_total, swap_percent, at
 FROM metric_sample
 WHERE node = ?
 ORDER BY at DESC, id DESC
 LIMIT 1;`
 
 	var (
-		m       MetricSample
-		memUsed int64
-		memTot  int64
-		atUnix  int64
+		m        MetricSample
+		memUsed  int64
+		memTot   int64
+		swapUsed int64
+		swapTot  int64
+		atUnix   int64
 	)
 	err := db.conn.QueryRow(q, node).Scan(
-		&m.Node, &m.CPUPercent, &memUsed, &memTot, &m.MemPercent, &atUnix,
+		&m.Node, &m.CPUPercent, &memUsed, &memTot, &m.MemPercent,
+		&m.Load1, &m.Load5, &m.Load15, &swapUsed, &swapTot, &m.SwapPercent, &atUnix,
 	)
 	if err == sql.ErrNoRows {
 		return MetricSample{}, false, nil
@@ -319,6 +348,8 @@ LIMIT 1;`
 
 	m.MemUsed = uint64(memUsed)
 	m.MemTotal = uint64(memTot)
+	m.SwapUsed = uint64(swapUsed)
+	m.SwapTotal = uint64(swapTot)
 	m.At = time.Unix(atUnix, 0).UTC()
 	return m, true, nil
 }
@@ -342,18 +373,23 @@ func scanSamples(rows *sql.Rows) ([]MetricSample, error) {
 	var out []MetricSample
 	for rows.Next() {
 		var (
-			m       MetricSample
-			memUsed int64
-			memTot  int64
-			atUnix  int64
+			m        MetricSample
+			memUsed  int64
+			memTot   int64
+			swapUsed int64
+			swapTot  int64
+			atUnix   int64
 		)
 		if err := rows.Scan(
-			&m.Node, &m.CPUPercent, &memUsed, &memTot, &m.MemPercent, &atUnix,
+			&m.Node, &m.CPUPercent, &memUsed, &memTot, &m.MemPercent,
+			&m.Load1, &m.Load5, &m.Load15, &swapUsed, &swapTot, &m.SwapPercent, &atUnix,
 		); err != nil {
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
 		m.MemUsed = uint64(memUsed)
 		m.MemTotal = uint64(memTot)
+		m.SwapUsed = uint64(swapUsed)
+		m.SwapTotal = uint64(swapTot)
 		m.At = time.Unix(atUnix, 0).UTC()
 		out = append(out, m)
 	}

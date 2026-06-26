@@ -34,6 +34,12 @@ type peerMetrics struct {
 	MemUsed     uint64  `json:"mem_used"`
 	MemTotal    uint64  `json:"mem_total"`
 	MemPercent  float64 `json:"mem_percent"`
+	Load1       float64 `json:"load1"`
+	Load5       float64 `json:"load5"`
+	Load15      float64 `json:"load15"`
+	SwapUsed    uint64  `json:"swap_used"`
+	SwapTotal   uint64  `json:"swap_total"`
+	SwapPercent float64 `json:"swap_percent"`
 	CollectedAt string  `json:"collected_at"`
 }
 
@@ -190,12 +196,18 @@ func (p *Poller) pollPeer(ctx context.Context, peer storage.Peer) {
 		at = time.Now().UTC()
 	}
 	if err := p.db.InsertMetric(storage.MetricSample{
-		Node:       peer.Name,
-		CPUPercent: m.CPUPercent,
-		MemUsed:    m.MemUsed,
-		MemTotal:   m.MemTotal,
-		MemPercent: m.MemPercent,
-		At:         at,
+		Node:        peer.Name,
+		CPUPercent:  m.CPUPercent,
+		MemUsed:     m.MemUsed,
+		MemTotal:    m.MemTotal,
+		MemPercent:  m.MemPercent,
+		Load1:       m.Load1,
+		Load5:       m.Load5,
+		Load15:      m.Load15,
+		SwapUsed:    m.SwapUsed,
+		SwapTotal:   m.SwapTotal,
+		SwapPercent: m.SwapPercent,
+		At:          at,
 	}); err != nil {
 		log.Printf("cluster: store peer %q metrics failed: %v", peer.Name, err)
 	}

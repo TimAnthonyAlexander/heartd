@@ -22,6 +22,12 @@ export interface Metrics {
   mem_used: number
   mem_total: number
   mem_percent: number
+  load1: number
+  load5: number
+  load15: number
+  swap_used: number
+  swap_total: number
+  swap_percent: number
   collected_at: string
 }
 
@@ -30,6 +36,12 @@ export interface HistoryPoint {
   mem_used: number
   mem_total: number
   mem_percent: number
+  load1: number
+  load5: number
+  load15: number
+  swap_used: number
+  swap_total: number
+  swap_percent: number
   at: string
 }
 

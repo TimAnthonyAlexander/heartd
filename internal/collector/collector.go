@@ -74,12 +74,18 @@ func (c *Collector) sampleOnce(ctx context.Context) {
 	}
 
 	sample := storage.MetricSample{
-		Node:       c.node,
-		CPUPercent: snap.CPUPercent,
-		MemUsed:    snap.MemUsed,
-		MemTotal:   snap.MemTotal,
-		MemPercent: snap.MemPercent,
-		At:         at,
+		Node:        c.node,
+		CPUPercent:  snap.CPUPercent,
+		MemUsed:     snap.MemUsed,
+		MemTotal:    snap.MemTotal,
+		MemPercent:  snap.MemPercent,
+		Load1:       snap.Load1,
+		Load5:       snap.Load5,
+		Load15:      snap.Load15,
+		SwapUsed:    snap.SwapUsed,
+		SwapTotal:   snap.SwapTotal,
+		SwapPercent: snap.SwapPercent,
+		At:          at,
 	}
 	if err := c.db.InsertMetric(sample); err != nil {
 		log.Printf("collector: insert failed: %v", err)

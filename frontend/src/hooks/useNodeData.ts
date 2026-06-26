@@ -24,6 +24,9 @@ export interface ChartPoint {
   memPct: number
   memUsed: number
   memTotal: number
+  load1: number
+  load5: number
+  load15: number
 }
 
 export interface NetPoint {
@@ -134,6 +137,9 @@ export function useNodeData(
           memPct: p.mem_percent,
           memUsed: p.mem_used,
           memTotal: p.mem_total,
+          load1: p.load1,
+          load5: p.load5,
+          load15: p.load15,
         }))
         const netSeries = netHist.map<NetPoint>((p) => ({
           t: new Date(p.at).getTime(),
@@ -170,6 +176,9 @@ export function useNodeData(
           memPct: m.mem_percent,
           memUsed: m.mem_used,
           memTotal: m.mem_total,
+          load1: m.load1,
+          load5: m.load5,
+          load15: m.load15,
         }
         setData((d) => {
           // Skip duplicate points: /metrics returns the latest persisted sample,
