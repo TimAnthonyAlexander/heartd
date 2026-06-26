@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Box, Button, Paper, Typography } from '@mui/material'
+import { Box, Button, Typography } from '@mui/material'
 import { colors } from '../../theme'
 
 // Format an interval in seconds to a compact label: "30s", "5m", "2h".
@@ -30,23 +30,27 @@ interface SectionProps {
   actions?: ReactNode
 }
 
-// A settings panel matching the dashboard's Paper sections.
+// A free-standing settings block: a heading and its fields sit directly on the
+// page rather than inside a card. Inner tables/lists keep their own borders for
+// structure; the section itself has no chrome.
 export function Section({ label, description, children, actions }: SectionProps) {
   return (
-    <Paper elevation={0} sx={{ p: 3, borderRadius: 2.5 }}>
-      <Typography variant="overline" sx={{ color: colors.textDim }}>
+    <Box>
+      <Typography
+        sx={{ fontSize: 16, fontWeight: 600, letterSpacing: '-0.01em', color: colors.text }}
+      >
         {label}
       </Typography>
       {description && (
-        <Typography sx={{ fontSize: 13, color: colors.textFaint, mt: 0.25, mb: 0.5 }}>
+        <Typography sx={{ fontSize: 13, color: colors.textFaint, mt: 0.5 }}>
           {description}
         </Typography>
       )}
-      <Box sx={{ mt: 2 }}>{children}</Box>
+      <Box sx={{ mt: 2.5 }}>{children}</Box>
       {actions && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mt: 3 }}>{actions}</Box>
       )}
-    </Paper>
+    </Box>
   )
 }
 

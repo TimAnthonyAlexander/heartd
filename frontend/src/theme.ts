@@ -49,7 +49,9 @@ export const theme = createTheme({
     error: { main: colors.error },
     divider: colors.border,
   },
-  shape: { borderRadius: 10 },
+  // Tighter corners across the board. Card sites multiply this (sx borderRadius
+  // 2.5 -> 10px); controls use it directly (4px).
+  shape: { borderRadius: 4 },
   typography: {
     fontFamily:
       '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
