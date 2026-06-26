@@ -36,19 +36,17 @@ resources, service checks, and the reachability of every node in a small cluster
 
 ## Quick start
 
-**Try it now** (Linux or macOS) — fetch the binary for your platform and run it.
-No config, no clone, no build:
+**Run it now** (Linux or macOS) — downloads heartd for your machine and starts it
+on <http://localhost:9300>. No clone, no build, no sudo:
 
 ```sh
-curl -fsSL "https://github.com/timanthonyalexander/heartd/releases/latest/download/heartd-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" -o heartd
-chmod +x heartd
-./heartd
+curl -fsSL https://raw.githubusercontent.com/timanthonyalexander/heartd/main/run.sh | bash
 ```
 
-Then open <http://localhost:9300> and create the first admin account. With no
-`heartd.yaml`, heartd runs with sensible defaults (local node only, 30s sampling,
-the default alert rules, no checks/peers) — everything else is configured in the
-dashboard.
+Open <http://localhost:9300>, create the first admin account, and you're in.
+`Ctrl-C` stops it. With no config, heartd runs on sensible defaults (local node,
+30s sampling, the default alert rules) — everything else is set in the dashboard.
+Pass flags through with `... | bash -s -- -addr :8080`.
 
 **Install as a service** (Linux) — one command, sets up a hardened systemd unit:
 
@@ -332,6 +330,7 @@ internal/
   web/             go:embed of the built frontend
 frontend/          React + Vite + TypeScript + MUI dashboard
 deploy/            systemd unit template
+run.sh             download-and-run bootstrap (no install)
 install.sh         systemd installer (Linux)
 update.sh          in-place binary upgrade (Linux)
 ```
