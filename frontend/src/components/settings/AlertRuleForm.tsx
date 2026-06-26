@@ -17,6 +17,7 @@ import { colors } from '../../theme'
 import { SegmentedTabs } from '../SegmentedTabs'
 import { Toggle } from '../Toggle'
 import { formatInterval } from './shared'
+import { TemplateChips, alertTemplates, type AlertTemplate } from './templates'
 
 interface SourceMeta {
   value: AlertSource
@@ -81,6 +82,20 @@ export function AlertRuleForm({ open, initial, onSubmit, onClose }: Props) {
     initial && meta.scale ? initial.threshold / meta.scale : (initial?.threshold ?? 0)
   const [threshold, setThreshold] = useState(String(initialThreshold))
 
+  // Seed the form from a template (create mode only). Thresholds are in display
+  // units here and scaled to storage units on save. The name is only applied
+  // when empty, so it won't clobber something you've typed.
+  const applyTemplate = (t: AlertTemplate) => {
+    if (!name.trim()) setName(t.name)
+    setSource(t.source)
+    setEntity(t.entity ?? '')
+    setComparator(t.comparator || '>=')
+    setThreshold(String(t.threshold ?? 0))
+    setSeverity(t.severity)
+    setForSec(String(t.forSeconds ?? 0))
+    setGraceSec(String(t.graceSeconds ?? 0))
+  }
+
   const save = async () => {
     if (name.trim() === '') {
       setError('Give the alert a name.')
@@ -125,6 +140,9 @@ export function AlertRuleForm({ open, initial, onSubmit, onClose }: Props) {
       <DialogTitle sx={{ pb: 1 }}>{isEdit ? 'Edit alert' : 'New alert'}</DialogTitle>
       <DialogContent>
         <Stack spacing={2.5} sx={{ mt: 0.5 }}>
+          {!isEdit && (
+            <TemplateChips label="Start from a template" items={alertTemplates} onPick={applyTemplate} />
+          )}
           <TextField
             label="Name"
             size="small"

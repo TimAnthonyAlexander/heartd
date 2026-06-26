@@ -15,6 +15,7 @@ import {
 } from '@mui/material'
 import type { CheckConfig } from '../../api'
 import { colors } from '../../theme'
+import { TemplateChips, checkTemplates, type CheckTemplate } from './templates'
 
 type CheckType = CheckConfig['type']
 
@@ -55,6 +56,15 @@ export function CheckForm({ open, initial, onSubmit, onClose }: Props) {
     (value: CheckConfig[K]) =>
       setCheck((prev) => ({ ...prev, [key]: value }))
 
+  // Seed the form from a template. The template name is only applied when the
+  // name field is still empty, so it never clobbers something you've typed.
+  const applyTemplate = (t: CheckTemplate) =>
+    setCheck((prev) => ({
+      ...prev,
+      ...t.values,
+      name: prev.name.trim() ? prev.name : t.values.name ?? prev.name,
+    }))
+
   const submit = async () => {
     if (!check.name.trim()) {
       setError('Name is required.')
@@ -75,6 +85,9 @@ export function CheckForm({ open, initial, onSubmit, onClose }: Props) {
       <DialogTitle>{check.id === 0 ? 'Add check' : `Edit ${initial?.name ?? 'check'}`}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
+          {check.id === 0 && (
+            <TemplateChips label="Start from a template" items={checkTemplates} onPick={applyTemplate} />
+          )}
           <TextField
             label="Name"
             size="small"
