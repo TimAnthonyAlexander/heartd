@@ -73,21 +73,22 @@ heartd supports being installed on multiple servers. Nodes are aware of each oth
 
 **How it works:**
 
-Each node is configured with a list of peer nodes (by name and URL). On startup, each node announces itself to its peers via the REST API. Peers are stored in the local database.
-
-Each node periodically polls its configured peers:
+Nodes are seeded with peers (name + URL) and can also be added live from the dashboard. Each node periodically polls its peers:
 - Fetches their current system metrics
 - Fetches the status of their checks
 - Checks that the peer itself is reachable (acts as an uptime ping)
 
-**The dashboard on each node shows all nodes** — not just the local one. You can switch between nodes in the UI and see their metrics and check statuses. If a peer is unreachable, it is shown as "down" in the sidebar.
+Peer data is stored locally under each peer's name, so **the dashboard on each node shows all nodes** — switch between them in the UI to see every node's metrics and checks; an unreachable node shows as "down."
 
-This means:
-- Node A (web server) can see and alert on Node B (database server) being down
-- Node B (database server) can see and alert on Node A (web server) being down
-- Each node's dashboard is a full view of the cluster, not just itself
+**Membership propagates automatically (gossip).** Add a node on *one* machine and the whole cluster discovers it within a poll cycle or two — no need to add it everywhere by hand. Nodes exchange their membership view and pull in any reachable node they don't yet know.
 
-Nodes do not need to be in the same network as long as they can reach each other over HTTP. Auth between nodes is handled by a shared secret configured in the YAML.
+**Identity is probed, not guessed.** A node is identified by what it reports for itself (its canonical name via a `/whoami` probe), not by how it was labelled or by a possibly-wrong self-advertised URL. This is what lets a node recognize itself in the gossip and avoid adding itself as a duplicate.
+
+**Display names propagate.** Renaming a node anywhere is pushed to the node itself, which then advertises that name to the whole cluster — so a rename done once shows the same label on every dashboard. The real node name stays the identity key; the display name is just a label.
+
+Nodes do not need to be in the same network as long as they can reach each other over HTTP. Auth between nodes is a shared secret; a single cluster-wide secret is the recommended setup (it also enables zero-config gossip).
+
+> Full design, endpoints, and operational notes: **[CLUSTERING.md](./CLUSTERING.md)**.
 
 ---
 
@@ -103,9 +104,10 @@ heartd sends alerts when a check transitions from healthy to failing, and again 
 
 **Notification channels:**
 - **Email** — via SMTP. Configurable sender, recipient(s), subject prefix.
-- **Webhook** — HTTP POST with a JSON payload to any URL (Slack, Discord, custom endpoint, etc.)
+- **Webhook** — HTTP POST with a JSON payload to any URL.
+- **Slack / Discord / Telegram** — native chat-channel delivery.
 
-Both channels are optional. At least one should be configured for alerting to be useful.
+All channels are optional; configure at least one. Alerts use each node's **display name** (alias) rather than its internal name, so notifications read the way the dashboard does. The internal node name remains the dedup/identity key, and stored incident history keeps the internal name.
 
 **Alert deduplication:** heartd does not send repeated alerts for an ongoing failure. It sends one alert when the check first fails and one when it recovers. No spam.
 
@@ -131,7 +133,7 @@ All configuration lives in a single `heartd.yaml` file. heartd looks for it in t
 
 **Top-level sections:**
 
-- `server` — node name, port, optional basic auth
+- `server` — node name, port, db path, optional `advertise_url`, optional `display_name` (seeds this node's UI label on first run), optional `peer_secret` (a cluster-wide shared secret; recommended)
 - `peers` — list of other heartd nodes (name + URL + shared secret)
 - `checks` — list of service checks
 - `thresholds` — system metric alert thresholds (CPU %, disk %, memory %)

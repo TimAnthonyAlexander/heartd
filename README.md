@@ -21,11 +21,14 @@ resources, service checks, and the reachability of every node in a small cluster
   types (CPU/memory/disk %, check failing, check latency, network in/out, node
   unreachable, no-data). Each rule has a `warning`/`critical` severity, an
   optional sustained-duration (*fire only after N seconds*), and an anti-flap
-  recovery grace. Delivered over email (SMTP) and/or webhook (POST JSON).
+  recovery grace. Delivered over email (SMTP), webhook (POST JSON), and
+  Slack/Discord/Telegram — using each node's display name.
 - **Multi-node** — point nodes at each other; every node's dashboard shows the
   whole cluster (metrics + checks for each node) and flags any node that goes
-  down. Add and remove nodes live from the sidebar. Node-to-node auth is a shared
-  secret; nodes only need HTTP reachability, not a shared network.
+  down. **Add a node once on any machine and the whole cluster auto-discovers it**
+  (membership gossip); **rename a node once and the label propagates everywhere.**
+  Node-to-node auth is a shared secret; nodes only need HTTP reachability, not a
+  shared network. See [docs/CLUSTERING.md](docs/CLUSTERING.md).
 - **Live configuration** — checks, alerts, notification channels, sampling
   cadence, retention, peers, and user accounts are all edited **in the dashboard**
   and applied **without a restart**. The YAML file only seeds first-run defaults.
