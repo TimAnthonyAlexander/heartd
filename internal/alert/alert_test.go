@@ -495,3 +495,33 @@ func TestActiveAlertsSnapshot(t *testing.T) {
 		t.Fatalf("expected web-01 clear after recovery, got %d active", len(got))
 	}
 }
+
+// TestObserverStampedOnAlertAndSnapshot verifies the reporting node's name is
+// carried onto both the dispatched alert and the live active-alert snapshot. For
+// a peer-unreachable alert the subject (Node) is the watched peer while Observer
+// is the watcher — the distinction that makes a single flapping node's false
+// alerts attributable to itself rather than to the peers it watches.
+func TestObserverStampedOnAlertAndSnapshot(t *testing.T) {
+	e, f := newTestEngine()
+	e.SetObserver("watcher-01")
+	r := RuleView{ID: 9, Name: "Node unreachable", Severity: "critical", Source: "peer"}
+
+	// watcher-01 reports peer db-02 as down.
+	e.Observe(r, "db-02", "", "node is unreachable", true, false, t0)
+	waitFor(t, f, 1)
+	a := f.snapshot()[0]
+	if a.Node != "db-02" || a.Observer != "watcher-01" {
+		t.Fatalf("expected Node=db-02 Observer=watcher-01, got Node=%q Observer=%q", a.Node, a.Observer)
+	}
+
+	if active := e.ActiveAlertsForNode("db-02"); len(active) != 1 || active[0].Observer != "watcher-01" {
+		t.Fatalf("expected live snapshot Observer=watcher-01, got %+v", active)
+	}
+
+	// Recovery carries the observer too.
+	e.Observe(r, "db-02", "", "connected", false, false, t0.Add(time.Second))
+	waitFor(t, f, 2)
+	if rec := f.snapshot()[1]; rec.Observer != "watcher-01" {
+		t.Fatalf("expected recovery Observer=watcher-01, got %q", rec.Observer)
+	}
+}

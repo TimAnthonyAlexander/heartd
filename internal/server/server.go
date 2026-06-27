@@ -786,6 +786,7 @@ func (s *server) handlePeerDiskIO(w http.ResponseWriter, r *http.Request) {
 
 // activeAlertDTO is the dashboard's view of one alert that is firing right now.
 type activeAlertDTO struct {
+	Observer string `json:"observer"` // node that reported this firing alert
 	Entity   string `json:"entity"`
 	Source   string `json:"source"`
 	Subject  string `json:"subject"`
@@ -797,6 +798,7 @@ type activeAlertDTO struct {
 // alertEventDTO is the dashboard's view of one past firing/recovered transition.
 type alertEventDTO struct {
 	Node       string `json:"node"`
+	Observer   string `json:"observer"` // node that reported this transition
 	RuleID     string `json:"rule_id"`
 	RuleSource string `json:"rule_source"`
 	Entity     string `json:"entity"`
@@ -820,6 +822,7 @@ func (s *server) handleAlertsActive(w http.ResponseWriter, r *http.Request) {
 				since = a.BreachSince.UTC().Format(time.RFC3339)
 			}
 			out = append(out, activeAlertDTO{
+				Observer: a.Observer,
 				Entity:   a.Entity,
 				Source:   a.Source,
 				Subject:  a.Subject,
@@ -849,6 +852,7 @@ func (s *server) handleAlertsHistory(w http.ResponseWriter, r *http.Request) {
 	for _, e := range events {
 		out = append(out, alertEventDTO{
 			Node:       e.Node,
+			Observer:   e.Observer,
 			RuleID:     e.RuleID,
 			RuleSource: e.RuleSource,
 			Entity:     e.Entity,

@@ -345,6 +345,7 @@ export interface AlertRule {
 // ActiveAlert is one rule currently firing for a node, from the engine's live
 // in-memory state.
 export interface ActiveAlert {
+  observer: string // node that reported this firing alert ("" if unknown)
   entity: string
   source: string
   subject: string
@@ -356,6 +357,7 @@ export interface ActiveAlert {
 // AlertEvent is one past firing/recovered transition recorded for a node.
 export interface AlertEvent {
   node: string
+  observer: string // node that reported this transition ("" if unknown)
   rule_id: string
   rule_source: string
   entity: string

@@ -24,6 +24,7 @@ const httpTimeout = sendTimeout
 type webhookPayload struct {
 	Kind     Kind   `json:"kind"`
 	Node     string `json:"node"`
+	Observer string `json:"observer,omitempty"`
 	Entity   string `json:"entity,omitempty"`
 	Subject  string `json:"subject"`
 	Severity string `json:"severity,omitempty"`
@@ -57,6 +58,7 @@ func (w *WebhookNotifier) Send(ctx context.Context, a Alert) error {
 	payload := webhookPayload{
 		Kind:     a.Kind,
 		Node:     a.Node,
+		Observer: a.Observer,
 		Entity:   a.Entity,
 		Subject:  a.Subject,
 		Severity: a.Severity,
@@ -240,6 +242,9 @@ func buildEmailMessage(cfg config.EmailNotify, a Alert) []byte {
 	if t := entityLabel(a.Entity); t != "" {
 		b.WriteString("Target: " + t + "\r\n")
 	}
+	if a.Observer != "" {
+		b.WriteString("Reported by: " + a.Observer + "\r\n")
+	}
 	b.WriteString("Time: " + when + "\r\n")
 
 	// HTML alternative.
@@ -287,6 +292,7 @@ func emailHTML(a Alert, when string) string {
 		`<table role="presentation" width="100%" cellpadding="0" cellspacing="0">` +
 		metaRow("Node", a.Node) +
 		metaRow("Target", entityLabel(a.Entity)) +
+		metaRow("Reported by", a.Observer) +
 		metaRow("When", when+" UTC") +
 		`</table></td></tr>` +
 		`<tr><td style="padding:18px 32px 26px;color:#9b958a;font-size:12px;line-height:1.5;">heartd · automated monitoring alert</td></tr>` +

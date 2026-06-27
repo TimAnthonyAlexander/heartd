@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS alert_rule (
 CREATE TABLE IF NOT EXISTS alert_event (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     node        TEXT NOT NULL,
+    observer    TEXT NOT NULL DEFAULT '',
     rule_id     TEXT NOT NULL DEFAULT '',
     rule_source TEXT NOT NULL DEFAULT '',
     entity      TEXT NOT NULL DEFAULT '',
@@ -217,6 +218,7 @@ func ensureColumns(conn *sql.DB) error {
 		{"metric_sample", "swap_total", "INTEGER NOT NULL DEFAULT 0"},
 		{"metric_sample", "swap_percent", "REAL NOT NULL DEFAULT 0"},
 		{"node_alias", "advertised_alias", "TEXT NOT NULL DEFAULT ''"},
+		{"alert_event", "observer", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, m := range migrations {
 		has, err := hasColumn(conn, m.table, m.name)

@@ -31,6 +31,7 @@ type Alert struct {
 	RuleID   int64     // the alert rule that produced this (0 if none)
 	Source   string    // rule source (cpu|mem|disk|peer|nodata|...); part of the dedup key
 	Node     string    // node the alert concerns
+	Observer string    // node that observed/reported this transition (this node's name)
 	Entity   string    // mount / check / peer the rule targets ("" if n/a)
 	Subject  string    // rule name (or legacy check/peer/metric name)
 	Severity string    // warning | critical ("" for legacy)

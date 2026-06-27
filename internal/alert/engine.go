@@ -45,6 +45,7 @@ type ruleState struct {
 // It is a value copy; the Engine never hands out pointers to its internal state.
 type ActiveAlert struct {
 	Node        string
+	Observer    string
 	Entity      string
 	Source      string
 	Subject     string
@@ -62,6 +63,7 @@ type Engine struct {
 	coord       *Coordinator             // optional cross-node dedup; nil = send everything locally
 	recorder    func(Alert)              // optional incident-history sink; nil = record nothing
 	displayName func(node string) string // optional node→display-name lookup for outbound text; nil = use raw name
+	observer    string                   // this node's name; stamped on every alert as the reporter
 
 	mu    sync.Mutex
 	state map[string]ruleState
@@ -71,6 +73,13 @@ type Engine struct {
 func NewEngine(d *Dispatcher) *Engine {
 	return &Engine{dispatcher: d, state: make(map[string]ruleState)}
 }
+
+// SetObserver records this node's name, stamped onto every alert (and active
+// alert) as the Observer — the node that noticed the transition. This is what
+// lets a notification say WHICH node reported it, so a single confused watcher
+// firing false "peer unreachable" alerts is immediately attributable to itself
+// rather than read as the watched peers actually going down.
+func (e *Engine) SetObserver(name string) { e.observer = name }
 
 // SetCoordinator enables cross-node alert deduplication. When set, alerts about
 // a peer are gated through the Coordinator so only one node delivers them.
@@ -214,6 +223,7 @@ func (e *Engine) Observe(rule RuleView, node, entity, detail string, conditionMe
 	toFire.RuleID = rule.ID
 	toFire.Source = rule.Source
 	toFire.Node = node
+	toFire.Observer = e.observer
 	toFire.Entity = entity
 	toFire.Subject = rule.Name
 	toFire.Severity = severity
@@ -242,6 +252,7 @@ func (e *Engine) ActiveAlerts() []ActiveAlert {
 		}
 		out = append(out, ActiveAlert{
 			Node:        st.node,
+			Observer:    e.observer,
 			Entity:      st.entity,
 			Source:      st.source,
 			Subject:     st.subject,

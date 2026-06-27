@@ -68,6 +68,11 @@ func run(configPath, addrOverride string, headlessFlag bool) error {
 	coordinator.SetClusterSecret(cfg.Server.PeerSecret)
 	engine.SetCoordinator(coordinator)
 
+	// Stamp every alert with the observing node's name, so notifications and the
+	// incident history record WHICH node reported a transition (the watcher), not
+	// just the watched subject.
+	engine.SetObserver(cfg.Server.Name)
+
 	// Relabel outbound notifications with each node's user-set display alias.
 	// Read fresh per dispatch so live alias edits apply without a restart. This
 	// affects only the delivered message text — dedup keys, the cross-node send
@@ -86,6 +91,7 @@ func run(configPath, addrOverride string, headlessFlag bool) error {
 	engine.SetRecorder(func(a alert.Alert) {
 		ev := storage.AlertEvent{
 			Node:       a.Node,
+			Observer:   a.Observer,
 			RuleID:     strconv.FormatInt(a.RuleID, 10),
 			RuleSource: a.Source,
 			Entity:     a.Entity,

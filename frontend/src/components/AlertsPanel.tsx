@@ -84,9 +84,9 @@ function FiringNow({ active }: { active: ActiveAlert[] }) {
                     }}
                   >
                     {a.severity}
-                    {entityLabel(a.entity) && (
+                    {metaSuffix(a.entity, a.observer) && (
                       <Box component="span" sx={{ color: colors.textFaint, fontWeight: 600 }}>
-                        {`  · ${entityLabel(a.entity)}`}
+                        {`  · ${metaSuffix(a.entity, a.observer)}`}
                       </Box>
                     )}
                   </Typography>
@@ -140,9 +140,9 @@ function RecentHistory({ history }: { history: AlertEvent[] }) {
                   <Typography sx={{ fontSize: 13.5, fontWeight: 600 }} noWrap title={e.subject}>
                     {e.subject || e.rule_source}
                   </Typography>
-                  {entityLabel(e.entity) && (
+                  {metaSuffix(e.entity, e.observer) && (
                     <Typography sx={{ fontSize: 11.5, color: colors.textFaint }} noWrap>
-                      {entityLabel(e.entity)}
+                      {metaSuffix(e.entity, e.observer)}
                     </Typography>
                   )}
                 </Box>
@@ -319,6 +319,19 @@ function SectionHeader({ label, count, accent }: { label: string; count?: number
 
 function entityLabel(entity: string): string {
   return entity === '*' ? '' : entity
+}
+
+// metaSuffix renders the faint "· entity · via observer" tail shown under an
+// alert's subject. The observer (the node that reported the transition) is the
+// key diagnostic: when one watcher flaps and fires false "peer unreachable"
+// alerts, every row carries the same "via X", pinning the noise to that node
+// rather than reading as the watched peers going down. Either part may be blank.
+function metaSuffix(entity: string, observer?: string): string {
+  const parts: string[] = []
+  const ent = entityLabel(entity)
+  if (ent) parts.push(ent)
+  if (observer) parts.push(`via ${observer}`)
+  return parts.join(' · ')
 }
 
 function sevRank(severity: string): number {

@@ -14,6 +14,7 @@ import (
 type AlertEvent struct {
 	ID         int64
 	Node       string
+	Observer   string // node that observed/reported the transition ("" if unknown)
 	RuleID     string // the producing rule's id, as text ("" if none)
 	RuleSource string // rule source (cpu|mem|disk|peer|nodata|...)
 	Entity     string // mount / check / peer the rule targets ("" if n/a)
@@ -27,11 +28,12 @@ type AlertEvent struct {
 // InsertAlertEvent persists one alert state transition.
 func (db *DB) InsertAlertEvent(e AlertEvent) error {
 	const q = `
-INSERT INTO alert_event (node, rule_id, rule_source, entity, severity, state, subject, detail, at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`
+INSERT INTO alert_event (node, observer, rule_id, rule_source, entity, severity, state, subject, detail, at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 	if _, err := db.conn.Exec(
 		q,
 		e.Node,
+		e.Observer,
 		e.RuleID,
 		e.RuleSource,
 		e.Entity,
@@ -57,7 +59,7 @@ func (db *DB) AlertEventHistory(node string, since time.Time, limit int) ([]Aler
 	)
 	if limit > 0 {
 		const q = `
-SELECT id, node, rule_id, rule_source, entity, severity, state, subject, detail, at
+SELECT id, node, observer, rule_id, rule_source, entity, severity, state, subject, detail, at
 FROM alert_event
 WHERE node = ? AND at >= ?
 ORDER BY at DESC, id DESC
@@ -65,7 +67,7 @@ LIMIT ?;`
 		rows, err = db.conn.Query(q, node, sinceUnix, limit)
 	} else {
 		const q = `
-SELECT id, node, rule_id, rule_source, entity, severity, state, subject, detail, at
+SELECT id, node, observer, rule_id, rule_source, entity, severity, state, subject, detail, at
 FROM alert_event
 WHERE node = ? AND at >= ?
 ORDER BY at DESC, id DESC;`
@@ -106,7 +108,7 @@ func scanAlertEvents(rows *sql.Rows) ([]AlertEvent, error) {
 			atUnix int64
 		)
 		if err := rows.Scan(
-			&e.ID, &e.Node, &e.RuleID, &e.RuleSource, &e.Entity,
+			&e.ID, &e.Node, &e.Observer, &e.RuleID, &e.RuleSource, &e.Entity,
 			&e.Severity, &e.State, &e.Subject, &e.Detail, &atUnix,
 		); err != nil {
 			return nil, fmt.Errorf("scan row: %w", err)

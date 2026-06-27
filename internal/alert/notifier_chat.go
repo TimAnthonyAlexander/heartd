@@ -34,6 +34,9 @@ func formatAlertText(a Alert) string {
 	if t := entityLabel(a.Entity); t != "" {
 		b.WriteString("\nTarget: " + t)
 	}
+	if a.Observer != "" {
+		b.WriteString("\nReported by: " + a.Observer)
+	}
 	b.WriteString("\nTime: " + when + " UTC")
 	return b.String()
 }
