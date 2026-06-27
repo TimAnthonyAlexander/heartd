@@ -10,12 +10,10 @@ import { DiskPanel } from './components/DiskPanel'
 import { NetworkPanel } from './components/NetworkPanel'
 import { DiskIOPanel } from './components/DiskIOPanel'
 import { LoadPanel } from './components/LoadPanel'
-import { SwapPanel } from './components/SwapPanel'
 import { ChecksTable } from './components/ChecksTable'
 import { ProcessTable } from './components/ProcessTable'
 import { NetInterfacesPanel } from './components/NetInterfacesPanel'
 import { AlertsPanel } from './components/AlertsPanel'
-import { DashboardSection } from './components/DashboardSection'
 import { NodeConfig, type ConfigTab, type EditTarget } from './components/NodeConfig'
 import { SegmentedTabs, type TabItem } from './components/SegmentedTabs'
 import { RenameDialog } from './components/RenameDialog'
@@ -25,7 +23,7 @@ import { useNodeData } from './hooks/useNodeData'
 import { livePreset, RANGE_PRESETS, type TimeRange } from './timerange'
 import { useNodeAlerts } from './hooks/useNodeAlerts'
 import { useNodeAlertActivity } from './hooks/useNodeAlertActivity'
-import { colors, theme } from './theme'
+import { colors, percentColor, theme } from './theme'
 
 type NodeTab = 'dashboard' | ConfigTab
 
@@ -168,13 +166,18 @@ export default function App({ username, onLogout }: AppProps) {
                 </Box>
               )}
 
-              {/* Metric charts, grouped into balanced sections so rows always
-                  fill evenly (no orphan card) and the page reads top-down. */}
+              {/* Metric charts as one even grid: 1 / 2 / 4 columns, ordered by
+                  interest so the 8 cards tile into 2 clean rows of 4 on wide
+                  screens (4 rows of 2 when narrow). No headings, no orphan. */}
               {data.loading && !m ? (
                 <Box
                   sx={{
                     display: 'grid',
-                    gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' },
+                    gridTemplateColumns: {
+                      xs: '1fr',
+                      sm: 'repeat(2, minmax(0, 1fr))',
+                      lg: 'repeat(4, minmax(0, 1fr))',
+                    },
                     gap: 2.5,
                     mb: 4,
                   }}
@@ -182,11 +185,25 @@ export default function App({ username, onLogout }: AppProps) {
                   <PanelSkeleton />
                   <PanelSkeleton />
                   <PanelSkeleton />
+                  <PanelSkeleton />
                 </Box>
               ) : (
-                <>
+                <Box
+                  sx={{
+                    display: 'grid',
+                    gridTemplateColumns: {
+                      xs: '1fr',
+                      sm: 'repeat(2, minmax(0, 1fr))',
+                      lg: 'repeat(4, minmax(0, 1fr))',
+                    },
+                    gap: 2.5,
+                    mb: 4,
+                  }}
+                >
                   {m && (
-                    <DashboardSection title="CPU" columns={3}>
+                    <>
+                      {/* 1 CPU · 2 CPU Breakdown · 3 Per-Core · 4 Memory (swap
+                          folded in) · 5 Load — the metric-derived cards. */}
                       <MetricPanel
                         title="CPU"
                         headline={`${m.cpu_percent.toFixed(1)}%`}
@@ -200,28 +217,30 @@ export default function App({ username, onLogout }: AppProps) {
                         dimmed={data.unreachable}
                       />
                       <PerCorePanel cores={data.cores} dimmed={data.unreachable} />
-                    </DashboardSection>
-                  )}
-
-                  {/* The Memory section reflows 3<->2 cleanly: Swap only appears
-                      when the node has swap, and the column count follows it. */}
-                  {m && (
-                    <DashboardSection title="Memory" columns={m.swap_total > 0 ? 3 : 2}>
                       <MetricPanel
                         title="Memory"
                         headline={`${formatGB(m.mem_used)} / ${formatGB(m.mem_total)} GB`}
                         percent={m.mem_percent}
                         data={data.series.map((p) => ({ t: p.t, v: p.memPct }))}
                         dimmed={data.unreachable}
+                        footer={
+                          m.swap_total > 0 ? (
+                            <>
+                              Swap {formatGB(m.swap_used)} / {formatGB(m.swap_total)} GB ·{' '}
+                              <Box
+                                component="span"
+                                sx={{ color: percentColor(m.swap_percent), fontWeight: 600 }}
+                              >
+                                {m.swap_percent.toFixed(0)}%
+                              </Box>
+                            </>
+                          ) : (
+                            <Box component="span" sx={{ color: colors.textFaint }}>
+                              no swap
+                            </Box>
+                          )
+                        }
                       />
-                      {m.swap_total > 0 && (
-                        <SwapPanel
-                          used={m.swap_used}
-                          total={m.swap_total}
-                          percent={m.swap_percent}
-                          dimmed={data.unreachable}
-                        />
-                      )}
                       <LoadPanel
                         load1={m.load1}
                         load5={m.load5}
@@ -229,39 +248,52 @@ export default function App({ username, onLogout }: AppProps) {
                         series={data.series}
                         dimmed={data.unreachable}
                       />
-                    </DashboardSection>
+                    </>
                   )}
 
-                  <DashboardSection title="Storage & Network" columns={3}>
-                    <DiskPanel disks={data.disk} dimmed={data.unreachable} />
-                    <DiskIOPanel io={data.diskio} series={data.diskioSeries} dimmed={data.unreachable} />
-                    <NetworkPanel net={data.net} series={data.netSeries} dimmed={data.unreachable} />
-                  </DashboardSection>
-                </>
+                  {/* 6 Network · 7 Disk I/O · 8 Disk space (last — least
+                      interesting). These don't depend on `m`, so they render
+                      even during the brief pre-metrics load. */}
+                  <NetworkPanel net={data.net} series={data.netSeries} dimmed={data.unreachable} />
+                  <DiskIOPanel io={data.diskio} series={data.diskioSeries} dimmed={data.unreachable} />
+                  <DiskPanel disks={data.disk} dimmed={data.unreachable} />
+                </Box>
               )}
 
-              {/* Operational view: what a monitor exists to surface — Checks and
-                  Alerts (firing now / recent activity / rules) — sit directly
-                  under the charts, side-by-side on wide screens, stacked below lg. */}
-              <DashboardSection columns={2} breakpoint="lg" gap={4} align="start">
-                <ChecksTable
-                  checks={data.checks}
-                  onEdit={(name) => requestEdit({ kind: 'check', name })}
-                />
-                <AlertsPanel
-                  alerts={alerts}
-                  active={alertActivity.active}
-                  history={alertActivity.history}
-                  onEdit={(id) => requestEdit({ kind: 'alert', id })}
-                />
-              </DashboardSection>
+              {/* Operational + reference area: two independent columns on wide
+                  screens, each its own vertical stack so panels flow without
+                  leaving cross-column whitespace. Below lg it collapses to a
+                  single column reading Checks, Processes, Alerts, Net Interfaces. */}
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, minmax(0, 1fr))' },
+                  gap: 4,
+                  alignItems: 'start',
+                }}
+              >
+                {/* Left: the operational Checks panel first, then the heavier
+                    Top Processes table fills the space beneath it. */}
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <ChecksTable
+                    checks={data.checks}
+                    onEdit={(name) => requestEdit({ kind: 'check', name })}
+                  />
+                  <ProcessTable processes={data.processes} dimmed={data.unreachable} />
+                </Box>
 
-              {/* Reference tables: the heavier per-process and per-NIC views
-                  come last, also paired 50/50 and stacking below lg. */}
-              <DashboardSection columns={2} breakpoint="lg" gap={4} align="start">
-                <ProcessTable processes={data.processes} dimmed={data.unreachable} />
-                <NetInterfacesPanel interfaces={data.netInterfaces} dimmed={data.unreachable} />
-              </DashboardSection>
+                {/* Right: Alerts (firing now / activity / rules) up top, the
+                    per-NIC reference table beneath. */}
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <AlertsPanel
+                    alerts={alerts}
+                    active={alertActivity.active}
+                    history={alertActivity.history}
+                    onEdit={(id) => requestEdit({ kind: 'alert', id })}
+                  />
+                  <NetInterfacesPanel interfaces={data.netInterfaces} dimmed={data.unreachable} />
+                </Box>
+              </Box>
             </>
           ) : selected ? (
             <NodeConfig

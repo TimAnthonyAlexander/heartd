@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Box, LinearProgress, Paper, Typography } from '@mui/material'
 import {
   Area,
@@ -22,6 +23,9 @@ interface Props {
   percent: number
   data: SeriesPoint[]
   dimmed?: boolean
+  // An optional muted line rendered below the chart, used to fold a secondary
+  // reading (e.g. Swap) into the card instead of giving it a top-level slot.
+  footer?: ReactNode
 }
 
 function fmtTime(t: number): string {
@@ -48,7 +52,7 @@ function ChartTooltip({ active, payload }: any) {
   )
 }
 
-export function MetricPanel({ title, headline, percent, data, dimmed }: Props) {
+export function MetricPanel({ title, headline, percent, data, dimmed, footer }: Props) {
   const color = percentColor(percent)
   const gradId = `grad-${title.replace(/\s/g, '')}`
 
@@ -129,6 +133,20 @@ export function MetricPanel({ title, headline, percent, data, dimmed }: Props) {
           </ResponsiveContainer>
         )}
       </Box>
+
+      {footer && (
+        <Box
+          sx={{
+            mt: 1.5,
+            pt: 1.5,
+            borderTop: `1px solid ${colors.border}`,
+            fontSize: 12,
+            color: colors.textDim,
+          }}
+        >
+          {footer}
+        </Box>
+      )}
     </Paper>
   )
 }
