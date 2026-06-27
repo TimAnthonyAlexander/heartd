@@ -79,6 +79,7 @@ func New(cfg Config) http.Handler {
 	mux.Handle("GET /api/peer/checks", s.requireSecret(http.HandlerFunc(s.handlePeerChecks)))
 	mux.Handle("GET /api/peer/disk", s.requireSecret(http.HandlerFunc(s.handlePeerDisk)))
 	mux.Handle("GET /api/peer/network", s.requireSecret(http.HandlerFunc(s.handlePeerNetwork)))
+	mux.Handle("GET /api/peer/cpu", s.requireSecret(http.HandlerFunc(s.handlePeerCPUState)))
 	mux.Handle("GET /api/peer/diskio", s.requireSecret(http.HandlerFunc(s.handlePeerDiskIO)))
 	mux.Handle("GET /api/peer/processes", s.requireSecret(http.HandlerFunc(s.handlePeerProcesses)))
 
@@ -152,6 +153,8 @@ func (s *server) registerDashboardRoutes(mux *http.ServeMux) {
 
 	protect("GET /api/nodes/{name}/metrics", s.handleMetrics)
 	protect("GET /api/nodes/{name}/metrics/history", s.handleHistory)
+	protect("GET /api/nodes/{name}/cpu", s.handleCPUState)
+	protect("GET /api/nodes/{name}/cpu/history", s.handleCPUStateHistory)
 	protect("GET /api/nodes/{name}/checks", s.handleChecks)
 	protect("GET /api/nodes/{name}/disk", s.handleDisk)
 	protect("GET /api/nodes/{name}/network", s.handleNetwork)
@@ -596,6 +599,31 @@ type netHistoryPoint struct {
 	At       string  `json:"at"`
 }
 
+// cpuStateDTO is a node's latest CPU-state breakdown. Each field is a percentage
+// (0-100) of CPU time spent in that state over the last sampling interval.
+type cpuStateDTO struct {
+	User   float64 `json:"user"`
+	System float64 `json:"system"`
+	Nice   float64 `json:"nice"`
+	Iowait float64 `json:"iowait"`
+	Irq    float64 `json:"irq"`
+	Steal  float64 `json:"steal"`
+	Idle   float64 `json:"idle"`
+	At     string  `json:"at"`
+}
+
+// cpuStateHistoryPoint is one CPU-state breakdown at an instant, as charted.
+type cpuStateHistoryPoint struct {
+	User   float64 `json:"user"`
+	System float64 `json:"system"`
+	Nice   float64 `json:"nice"`
+	Iowait float64 `json:"iowait"`
+	Irq    float64 `json:"irq"`
+	Steal  float64 `json:"steal"`
+	Idle   float64 `json:"idle"`
+	At     string  `json:"at"`
+}
+
 // diskIODTO is one physical device's latest disk throughput/IOPS.
 type diskIODTO struct {
 	Device         string `json:"device"`
@@ -713,6 +741,74 @@ func (s *server) handlePeerNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, n)
+}
+
+func (s *server) cpuStateForNode(name string) (cpuStateDTO, bool, error) {
+	c, ok, err := s.cfg.DB.LatestCPUState(name)
+	if err != nil || !ok {
+		return cpuStateDTO{}, ok, err
+	}
+	return cpuStateDTO{
+		User: c.User, System: c.System, Nice: c.Nice, Iowait: c.Iowait,
+		Irq: c.Irq, Steal: c.Steal, Idle: c.Idle,
+		At: c.At.UTC().Format(time.RFC3339),
+	}, true, nil
+}
+
+func (s *server) handleCPUState(w http.ResponseWriter, r *http.Request) {
+	c, ok, err := s.cpuStateForNode(r.PathValue("name"))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusOK, nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+func (s *server) handleCPUStateHistory(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	var (
+		samples []storage.CPUStateSample
+		err     error
+	)
+	if from, to, ok := historyWindow(r); ok {
+		samples, err = s.cfg.DB.CPUStateWindow(name, from, to, maxHistoryPoints)
+	} else {
+		minutes := queryInt(r, "minutes", 60)
+		limit := queryInt(r, "limit", 200)
+		since := time.Now().UTC().Add(-time.Duration(minutes) * time.Minute)
+		samples, err = s.cfg.DB.RecentCPUStates(name, since, limit)
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	points := make([]cpuStateHistoryPoint, 0, len(samples))
+	for _, c := range samples {
+		points = append(points, cpuStateHistoryPoint{
+			User: c.User, System: c.System, Nice: c.Nice, Iowait: c.Iowait,
+			Irq: c.Irq, Steal: c.Steal, Idle: c.Idle,
+			At: c.At.UTC().Format(time.RFC3339),
+		})
+	}
+	writeJSON(w, http.StatusOK, points)
+}
+
+func (s *server) handlePeerCPUState(w http.ResponseWriter, r *http.Request) {
+	c, ok, err := s.cpuStateForNode(s.cfg.NodeName)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusOK, nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
 }
 
 func (s *server) diskIOForNode(name string) ([]diskIODTO, error) {

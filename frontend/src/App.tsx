@@ -4,6 +4,7 @@ import { Box, Drawer, Skeleton, useMediaQuery } from '@mui/material'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { MetricPanel } from './components/MetricPanel'
+import { CPUBreakdownPanel } from './components/CPUBreakdownPanel'
 import { DiskPanel } from './components/DiskPanel'
 import { NetworkPanel } from './components/NetworkPanel'
 import { DiskIOPanel } from './components/DiskIOPanel'
@@ -184,6 +185,11 @@ export default function App({ username, onLogout }: AppProps) {
                       headline={`${m.cpu_percent.toFixed(1)}%`}
                       percent={m.cpu_percent}
                       data={data.series.map((p) => ({ t: p.t, v: p.cpu }))}
+                      dimmed={data.unreachable}
+                    />
+                    <CPUBreakdownPanel
+                      state={data.cpuState}
+                      series={data.cpuStateSeries}
                       dimmed={data.unreachable}
                     />
                     <MetricPanel

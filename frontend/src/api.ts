@@ -273,6 +273,48 @@ export function fetchNetworkHistory(
   )
 }
 
+// A node's latest CPU-state breakdown. Each field is a percentage (0-100) of
+// CPU time spent in that state over the last sampling interval; the surfaced
+// states plus idle sum to ~100.
+export interface CPUState {
+  user: number
+  system: number
+  nice: number
+  iowait: number
+  irq: number
+  steal: number
+  idle: number
+  at: string
+}
+
+// One CPU-state breakdown at an instant, as charted.
+export interface CPUStateHistoryPoint {
+  user: number
+  system: number
+  nice: number
+  iowait: number
+  irq: number
+  steal: number
+  idle: number
+  at: string
+}
+
+export function fetchCPUState(nodeName: string, signal?: AbortSignal): Promise<CPUState | null> {
+  return getJSON<CPUState | null>(`/api/nodes/${encodeURIComponent(nodeName)}/cpu`, signal)
+}
+
+export function fetchCPUStateHistory(
+  nodeName: string,
+  fromSec: number,
+  toSec: number,
+  signal?: AbortSignal,
+): Promise<CPUStateHistoryPoint[]> {
+  return getJSON<CPUStateHistoryPoint[]>(
+    `/api/nodes/${encodeURIComponent(nodeName)}/cpu/history?from=${fromSec}&to=${toSec}`,
+    signal,
+  )
+}
+
 // One physical device's latest disk throughput / IOPS (rates are per second).
 export interface DiskIODevice {
   device: string

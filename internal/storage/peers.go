@@ -69,7 +69,7 @@ func (db *DB) DeletePeer(name string) error {
 // DeleteNodeData purges all metric, check, disk, and network rows stored under a
 // node's name. Used when a peer is removed so no orphaned history remains.
 func (db *DB) DeleteNodeData(name string) error {
-	for _, table := range []string{"metric_sample", "check_status", "disk_status", "net_sample", "process_top"} {
+	for _, table := range []string{"metric_sample", "check_status", "disk_status", "net_sample", "cpu_state_sample", "process_top"} {
 		if _, err := db.conn.Exec("DELETE FROM "+table+" WHERE node = ?;", name); err != nil {
 			return fmt.Errorf("storage: delete %s for %q: %w", table, name, err)
 		}

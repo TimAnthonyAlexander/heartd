@@ -35,6 +35,11 @@ type Collector struct {
 	prevNet   metrics.NetCounters
 	prevNetAt time.Time
 
+	// Previous cumulative CPU times, for deriving the per-state percentage
+	// breakdown between samples. Zero prevCPUTimesAt means no prior reading.
+	prevCPUTimes   metrics.CPUTimes
+	prevCPUTimesAt time.Time
+
 	// Previous per-device disk I/O counters, for deriving throughput/IOPS rates.
 	prevDiskIO   map[string]metrics.DiskIOCounters
 	prevDiskIOAt time.Time
@@ -103,6 +108,7 @@ func (c *Collector) sampleOnce(ctx context.Context) {
 
 	c.sampleDisks(ctx, at)
 	c.sampleNet(ctx, at)
+	c.sampleCPUState(ctx, at)
 	c.sampleDiskIO(ctx, at)
 	c.sampleProcesses(ctx, at)
 }
@@ -174,6 +180,58 @@ func (c *Collector) sampleNet(ctx context.Context, at time.Time) {
 		At:        at,
 	}); err != nil {
 		log.Printf("collector: net persist failed: %v", err)
+	}
+}
+
+// sampleCPUState reads cumulative CPU times and stores the per-state percentage
+// breakdown derived from the previous reading (delta(state)/delta(total)*100).
+// The first cycle has no previous reading, so it records prev and returns
+// WITHOUT inserting a row — an all-idle placeholder would render as a bogus 100%
+// idle spike at the start of the chart. The series therefore begins at the
+// second sample. Counter resets (delta(total) <= 0, or a negative per-state
+// delta) yield a zero contribution rather than a spurious spike, mirroring
+// sampleNet/sampleDiskIO.
+func (c *Collector) sampleCPUState(ctx context.Context, at time.Time) {
+	cur, err := metrics.ReadCPUTimes(ctx)
+	if err != nil {
+		log.Printf("collector: cpu state sample failed: %v", err)
+		return
+	}
+
+	// First cycle: prime the baseline and skip the insert so the chart doesn't
+	// start with a misleading all-idle point.
+	if c.prevCPUTimesAt.IsZero() {
+		c.prevCPUTimes = cur
+		c.prevCPUTimesAt = at
+		return
+	}
+
+	totalDelta := cur.Total - c.prevCPUTimes.Total
+	prev := c.prevCPUTimes
+	c.prevCPUTimes = cur
+	c.prevCPUTimesAt = at
+	if totalDelta <= 0 {
+		return // counter reset or no elapsed CPU time; skip this sample
+	}
+
+	pct := func(curVal, prevVal float64) float64 {
+		if delta := curVal - prevVal; delta > 0 {
+			return round2(delta / totalDelta * 100)
+		}
+		return 0
+	}
+	if err := c.db.InsertCPUState(storage.CPUStateSample{
+		Node:   c.node,
+		User:   pct(cur.User, prev.User),
+		System: pct(cur.System, prev.System),
+		Nice:   pct(cur.Nice, prev.Nice),
+		Iowait: pct(cur.Iowait, prev.Iowait),
+		Irq:    pct(cur.Irq, prev.Irq),
+		Steal:  pct(cur.Steal, prev.Steal),
+		Idle:   pct(cur.Idle, prev.Idle),
+		At:     at,
+	}); err != nil {
+		log.Printf("collector: cpu state persist failed: %v", err)
 	}
 }
 
@@ -313,6 +371,9 @@ func (c *Collector) prune() {
 	}
 	if _, err := c.db.PruneNet(before); err != nil {
 		log.Printf("collector: prune net failed: %v", err)
+	}
+	if _, err := c.db.PruneCPUState(before); err != nil {
+		log.Printf("collector: prune cpu state failed: %v", err)
 	}
 	if _, err := c.db.PruneDiskIO(before); err != nil {
 		log.Printf("collector: prune disk io failed: %v", err)

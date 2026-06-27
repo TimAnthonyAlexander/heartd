@@ -90,6 +90,19 @@ CREATE TABLE IF NOT EXISTS net_sample (
     at         INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_net_sample_node_at ON net_sample(node, at);
+CREATE TABLE IF NOT EXISTS cpu_state_sample (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    node       TEXT NOT NULL,
+    user_pct   REAL NOT NULL,
+    system_pct REAL NOT NULL,
+    nice_pct   REAL NOT NULL,
+    iowait_pct REAL NOT NULL,
+    irq_pct    REAL NOT NULL,
+    steal_pct  REAL NOT NULL,
+    idle_pct   REAL NOT NULL,
+    at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cpu_state_sample_node_at ON cpu_state_sample(node, at);
 CREATE TABLE IF NOT EXISTS disk_io_sample (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     node             TEXT NOT NULL,

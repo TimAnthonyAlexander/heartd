@@ -71,6 +71,18 @@ type peerNet struct {
 	At        string  `json:"at"`
 }
 
+// peerCPUState mirrors /api/peer/cpu.
+type peerCPUState struct {
+	User   float64 `json:"user"`
+	System float64 `json:"system"`
+	Nice   float64 `json:"nice"`
+	Iowait float64 `json:"iowait"`
+	Irq    float64 `json:"irq"`
+	Steal  float64 `json:"steal"`
+	Idle   float64 `json:"idle"`
+	At     string  `json:"at"`
+}
+
 // peerDiskIO mirrors one element of /api/peer/diskio.
 type peerDiskIO struct {
 	Device         string `json:"device"`
@@ -301,6 +313,7 @@ func (p *Poller) pollPeer(ctx context.Context, peer storage.Peer) {
 
 	p.storePeerDisk(ctx, peer)
 	p.storePeerNet(ctx, peer)
+	p.storePeerCPUState(ctx, peer)
 	p.storePeerDiskIO(ctx, peer)
 	p.storePeerProcesses(ctx, peer)
 	p.storePeerIdentity(ctx, peer)
@@ -346,6 +359,26 @@ func (p *Poller) storePeerNet(ctx context.Context, peer storage.Peer) {
 	_ = p.db.InsertNetSample(storage.NetSample{
 		Node: peer.Name, RecvBytes: n.RecvBytes, SentBytes: n.SentBytes,
 		RecvRate: n.RecvRate, SentRate: n.SentRate, At: at,
+	})
+}
+
+// storePeerCPUState fetches a peer's latest CPU-state breakdown and records it
+// under the peer's name.
+func (p *Poller) storePeerCPUState(ctx context.Context, peer storage.Peer) {
+	var c peerCPUState
+	if err := p.getJSON(ctx, peer, "/api/peer/cpu", &c); err != nil {
+		return
+	}
+	if c.At == "" {
+		return // peer has no sample yet
+	}
+	at, perr := time.Parse(time.RFC3339, c.At)
+	if perr != nil {
+		at = time.Now().UTC()
+	}
+	_ = p.db.InsertCPUState(storage.CPUStateSample{
+		Node: peer.Name, User: c.User, System: c.System, Nice: c.Nice,
+		Iowait: c.Iowait, Irq: c.Irq, Steal: c.Steal, Idle: c.Idle, At: at,
 	})
 }
 

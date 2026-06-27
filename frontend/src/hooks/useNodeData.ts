@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
+  fetchCPUState,
+  fetchCPUStateHistory,
   fetchChecks,
   fetchDisk,
   fetchDiskIO,
@@ -10,6 +12,7 @@ import {
   fetchNetworkHistory,
   fetchProcesses,
   type Check,
+  type CPUState,
   type DiskIODevice,
   type DiskMount,
   type Metrics,
@@ -46,6 +49,19 @@ export interface NetPoint {
   sent: number
 }
 
+// CPUStatePoint is one CPU-state breakdown at an instant (percentages summing to
+// ~100), used by the stacked CPU-breakdown chart.
+export interface CPUStatePoint {
+  t: number
+  user: number
+  system: number
+  nice: number
+  iowait: number
+  irq: number
+  steal: number
+  idle: number
+}
+
 export interface DiskIOPoint {
   t: number
   read: number // bytes/sec, summed across devices
@@ -72,6 +88,8 @@ export interface NodeData {
   disk: DiskMount[]
   net: NetCurrent | null
   netSeries: NetPoint[]
+  cpuState: CPUState | null
+  cpuStateSeries: CPUStatePoint[]
   diskio: DiskIOTotals | null
   diskioSeries: DiskIOPoint[]
   processes: ProcessInfo[]
@@ -87,12 +105,28 @@ const EMPTY: NodeData = {
   disk: [],
   net: null,
   netSeries: [],
+  cpuState: null,
+  cpuStateSeries: [],
   diskio: null,
   diskioSeries: [],
   processes: [],
   loading: true,
   unreachable: false,
   lastUpdated: null,
+}
+
+// cpuStatePoint maps a CPU-state history/current reading to a chart point.
+function cpuStatePoint(p: CPUState): CPUStatePoint {
+  return {
+    t: new Date(p.at).getTime(),
+    user: p.user,
+    system: p.system,
+    nice: p.nice,
+    iowait: p.iowait,
+    irq: p.irq,
+    steal: p.steal,
+    idle: p.idle,
+  }
 }
 
 // sumDiskIO aggregates a node's per-device snapshot into totals. Returns null
@@ -139,9 +173,10 @@ export function useNodeData(
     const seed = async () => {
       try {
         const { fromSec, toSec } = resolveWindow(range)
-        const [hist, netHist, ioHist] = await Promise.all([
+        const [hist, netHist, cpuHist, ioHist] = await Promise.all([
           fetchHistory(node, fromSec, toSec, controller.signal),
           fetchNetworkHistory(node, fromSec, toSec, controller.signal),
+          fetchCPUStateHistory(node, fromSec, toSec, controller.signal),
           fetchDiskIOHistory(node, fromSec, toSec, controller.signal),
         ])
         if (!active) return
@@ -160,6 +195,7 @@ export function useNodeData(
           recv: p.recv_rate,
           sent: p.sent_rate,
         }))
+        const cpuStateSeries = cpuHist.map(cpuStatePoint)
         const diskioSeries = ioHist.map<DiskIOPoint>((p) => ({
           t: new Date(p.at).getTime(),
           read: p.read_bytes_rate,
@@ -167,7 +203,7 @@ export function useNodeData(
           readOps: p.read_ops_rate,
           writeOps: p.write_ops_rate,
         }))
-        setData((d) => ({ ...d, series, netSeries, diskioSeries }))
+        setData((d) => ({ ...d, series, netSeries, cpuStateSeries, diskioSeries }))
       } catch {
         /* history is best-effort; live polling fills the charts */
       }
@@ -175,11 +211,12 @@ export function useNodeData(
 
     const tick = async () => {
       try {
-        const [m, cs, disk, net, ioRows, procs] = await Promise.all([
+        const [m, cs, disk, net, cpuState, ioRows, procs] = await Promise.all([
           fetchMetrics(node, controller.signal),
           fetchChecks(node, controller.signal),
           fetchDisk(node, controller.signal),
           fetchNetwork(node, controller.signal),
+          fetchCPUState(node, controller.signal),
           fetchDiskIO(node, controller.signal),
           fetchProcesses(node, controller.signal),
         ])
@@ -207,6 +244,8 @@ export function useNodeData(
               disk,
               net,
               netSeries: d.netSeries,
+              cpuState,
+              cpuStateSeries: d.cpuStateSeries,
               diskio,
               diskioSeries: d.diskioSeries,
               processes: procs,
@@ -229,6 +268,13 @@ export function useNodeData(
             net && netT !== lastNetT
               ? appendLive(d.netSeries, { t: netT!, recv: net.recv_rate, sent: net.sent_rate }, cutoff)
               : d.netSeries
+
+          const cpuT = cpuState ? new Date(cpuState.at).getTime() : null
+          const lastCpuT = d.cpuStateSeries[d.cpuStateSeries.length - 1]?.t
+          const cpuStateSeries =
+            cpuState && cpuT !== lastCpuT
+              ? appendLive(d.cpuStateSeries, cpuStatePoint(cpuState), cutoff)
+              : d.cpuStateSeries
 
           const ioT = diskio ? new Date(diskio.at).getTime() : null
           const lastIoT = d.diskioSeries[d.diskioSeries.length - 1]?.t
@@ -253,6 +299,8 @@ export function useNodeData(
             disk,
             net,
             netSeries,
+            cpuState,
+            cpuStateSeries,
             diskio,
             diskioSeries,
             processes: procs,

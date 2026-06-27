@@ -15,6 +15,22 @@ export const colors = {
   warn: '#e0a64b',
   error: '#ec6a5e',
   unknown: '#6e7681',
+  violet: '#b07ce8',
+}
+
+// cpuStateColors maps each CPU state to a stroke/fill color, built from the
+// theme tokens so the stacked breakdown chart stays on-palette (no inline hex).
+// The mapping is chosen to read at a glance: user = accent (application code),
+// system = warn (kernel/syscalls), iowait = error (disk-bound), steal = violet
+// (starved VM), nice = ok, irq = textDim, idle = faint.
+export const cpuStateColors: Record<string, string> = {
+  user: colors.accent,
+  system: colors.warn,
+  nice: colors.ok,
+  iowait: colors.error,
+  irq: colors.textDim,
+  steal: colors.violet,
+  idle: colors.textFaint,
 }
 
 // Maps a logical status to a color. Node statuses (ok/down/unknown) and check
