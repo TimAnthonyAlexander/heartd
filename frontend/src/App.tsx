@@ -9,6 +9,7 @@ import { PerCorePanel } from './components/PerCorePanel'
 import { DiskPanel } from './components/DiskPanel'
 import { NetworkPanel } from './components/NetworkPanel'
 import { DiskIOPanel } from './components/DiskIOPanel'
+import { DiskHealthPanel } from './components/DiskHealthPanel'
 import { LoadPanel } from './components/LoadPanel'
 import { ChecksTable } from './components/ChecksTable'
 import { ProcessTable } from './components/ProcessTable'
@@ -259,6 +260,11 @@ export default function App({ username, onLogout }: AppProps) {
                   <DiskPanel disks={data.disk} dimmed={data.unreachable} />
                 </Box>
               )}
+
+              {/* Disk health (software RAID + SMART). Returns null when the node
+                  has neither, so it won't disturb the layout on hosts without
+                  either source. */}
+              <DiskHealthPanel health={data.diskHealth} dimmed={data.unreachable} />
 
               {/* Operational + reference area: two independent columns on wide
                   screens, each its own vertical stack so panels flow without

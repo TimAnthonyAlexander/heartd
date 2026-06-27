@@ -1,0 +1,31 @@
+{
+  "generated_at": "2026-06-27T16:00:00Z",
+  "disks": [
+    {
+      "device": "/dev/sda",
+      "model": "HGST HUH728080ALE600",
+      "serial": "VK0A1B2C",
+      "health": "PASSED",
+      "reallocated": 0,
+      "pending": 0,
+      "uncorrectable": 0,
+      "crc_errors": 0,
+      "temp_c": 38,
+      "power_on_hours": 47798,
+      "power_cycle_count": 20
+    },
+    {
+      "device": "/dev/sdb",
+      "model": "HGST HUH728080ALE600",
+      "serial": "VK0A1B2D",
+      "health": "PASSED",
+      "reallocated": 8,
+      "pending": 0,
+      "uncorrectable": 0,
+      "crc_errors": 0,
+      "temp_c": 41,
+      "power_on_hours": 47801,
+      "power_cycle_count": 20
+    }
+  ]
+}

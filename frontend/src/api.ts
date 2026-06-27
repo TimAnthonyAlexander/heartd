@@ -365,6 +365,53 @@ export function fetchDiskIO(nodeName: string, signal?: AbortSignal): Promise<Dis
   return getJSON<DiskIODevice[]>(`/api/nodes/${encodeURIComponent(nodeName)}/diskio`, signal)
 }
 
+// ----- Disk health (software RAID + SMART) -----
+// RAID and SMART are independent data sources: a host may report either, both,
+// or neither. The UI hides each subsection (and the whole panel) by length.
+
+// One software-RAID (mdadm) array's current state. Informational only.
+export interface RaidArray {
+  name: string
+  level: string
+  state: 'clean' | 'degraded' | 'rebuilding' | 'failed'
+  total_devices: number
+  active_devices: number
+  resync_percent: number
+  detail: string
+  at: string
+}
+
+// One disk's SMART health. rollup (ok|warn|fail) and stale are computed server
+// side; stale flags SMART data older than its freshness threshold (RAID is live).
+export interface SmartDisk {
+  device: string
+  model: string
+  serial: string
+  health: string
+  rollup: 'ok' | 'warn' | 'fail'
+  reallocated: number
+  pending: number
+  uncorrectable: number
+  crc_errors: number
+  temp_c: number
+  power_on_hours: number
+  power_cycle_count: number
+  source_at: string
+  stale: boolean
+  at: string
+}
+
+// A node's disk health: RAID arrays and SMART disks as two independent arrays
+// (each always present, possibly empty).
+export interface DiskHealth {
+  raid: RaidArray[]
+  smart: SmartDisk[]
+}
+
+export function fetchDiskHealth(nodeName: string, signal?: AbortSignal): Promise<DiskHealth> {
+  return getJSON<DiskHealth>(`/api/nodes/${encodeURIComponent(nodeName)}/diskhealth`, signal)
+}
+
 // One process's current CPU/memory usage. cpu_percent is a share of total
 // machine capacity; mem_percent a share of physical memory; mem_rss is bytes.
 export interface ProcessInfo {

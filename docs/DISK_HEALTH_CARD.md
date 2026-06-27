@@ -219,3 +219,54 @@ the worst of {RAID state, SMART rollup} gives an at-a-glance signal.
 - Not a `check` and not an alert rule — those layers are separate and unchanged.
 - No per-second sampling; disk health is slow-moving state.
 - Hardware-RAID controllers (megacli/storcli) — current fleet is mdadm + AHCI.
+
+## SMART JSON schema (model 1)
+
+heartd runs unprivileged and never invokes `smartctl`. It reads a small,
+root-written JSON file (model 1 from "Privilege constraint" above). A root-side
+systemd timer runs `smartctl` periodically and writes this file; heartd reads it
+each cycle and flags the data **stale** when it is older than 30 minutes.
+
+- **Path:** `/var/lib/diskhealth/smart.json` (override with `HEARTD_SMART_FILE`).
+- **mdstat path** (RAID) is `/proc/mdstat` (override with `HEARTD_MDSTAT_PATH`),
+  read live and never marked stale.
+
+A complete example lives at [`examples/smart.json`](examples/smart.json).
+
+```json
+{
+  "generated_at": "2026-06-27T16:00:00Z",
+  "disks": [
+    {
+      "device": "/dev/sda",
+      "model": "HGST HUH728080ALE600",
+      "serial": "VKxxxx",
+      "health": "PASSED",
+      "reallocated": 0,
+      "pending": 0,
+      "uncorrectable": 0,
+      "crc_errors": 0,
+      "temp_c": 38,
+      "power_on_hours": 47798,
+      "power_cycle_count": 20
+    }
+  ]
+}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `generated_at` | RFC3339 string | When the file was produced. Drives the **stale** flag. If absent, heartd falls back to the file's mtime. |
+| `disks[].device` | string | Device path, e.g. `/dev/sda`. Identity key per node. |
+| `disks[].model` / `serial` | string | Drive model / serial (display only). |
+| `disks[].health` | string | Overall self-assessment, `PASSED` / `FAILED`. |
+| `disks[].reallocated` | integer | Reallocated sector count (attr 5 RAW). >0 ⇒ warn. |
+| `disks[].pending` | integer | Current pending sectors (attr 197 RAW). >0 ⇒ fail. |
+| `disks[].uncorrectable` | integer | Offline uncorrectable (attr 198 RAW). >0 ⇒ fail. |
+| `disks[].crc_errors` | integer | UDMA CRC errors (attr 199 RAW). Cabling/link signal. |
+| `disks[].temp_c` | integer | Temperature °C (attr 194 RAW). Above 55 ⇒ warn. |
+| `disks[].power_on_hours` | integer | Drive age in hours (attr 9 RAW). |
+| `disks[].power_cycle_count` | integer | Power-cycle count (attr 12 RAW). |
+
+A missing or malformed file is **not** an error: heartd simply treats SMART as
+absent on that host (the SMART subsection hides), independently of RAID.

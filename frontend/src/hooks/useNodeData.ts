@@ -13,9 +13,11 @@ import {
   fetchNetworkHistory,
   fetchNetInterfaces,
   fetchProcesses,
+  fetchDiskHealth,
   type Check,
   type CoreInfo,
   type CPUState,
+  type DiskHealth,
   type DiskIODevice,
   type DiskMount,
   type Metrics,
@@ -99,6 +101,7 @@ export interface NodeData {
   processes: ProcessInfo[]
   cores: CoreInfo[]
   netInterfaces: NetInterface[]
+  diskHealth: DiskHealth
   loading: boolean
   unreachable: boolean
   lastUpdated: number | null
@@ -118,6 +121,7 @@ const EMPTY: NodeData = {
   processes: [],
   cores: [],
   netInterfaces: [],
+  diskHealth: { raid: [], smart: [] },
   loading: true,
   unreachable: false,
   lastUpdated: null,
@@ -219,17 +223,19 @@ export function useNodeData(
 
     const tick = async () => {
       try {
-        const [m, cs, disk, net, cpuState, ioRows, procs, cores, netIfaces] = await Promise.all([
-          fetchMetrics(node, controller.signal),
-          fetchChecks(node, controller.signal),
-          fetchDisk(node, controller.signal),
-          fetchNetwork(node, controller.signal),
-          fetchCPUState(node, controller.signal),
-          fetchDiskIO(node, controller.signal),
-          fetchProcesses(node, controller.signal),
-          fetchCPUCores(node, controller.signal),
-          fetchNetInterfaces(node, controller.signal),
-        ])
+        const [m, cs, disk, net, cpuState, ioRows, procs, cores, netIfaces, diskHealth] =
+          await Promise.all([
+            fetchMetrics(node, controller.signal),
+            fetchChecks(node, controller.signal),
+            fetchDisk(node, controller.signal),
+            fetchNetwork(node, controller.signal),
+            fetchCPUState(node, controller.signal),
+            fetchDiskIO(node, controller.signal),
+            fetchProcesses(node, controller.signal),
+            fetchCPUCores(node, controller.signal),
+            fetchNetInterfaces(node, controller.signal),
+            fetchDiskHealth(node, controller.signal),
+          ])
         if (!active) return
         const diskio = sumDiskIO(ioRows)
         const point: ChartPoint = {
@@ -261,6 +267,7 @@ export function useNodeData(
               processes: procs,
               cores,
               netInterfaces: netIfaces,
+              diskHealth,
               loading: false,
               unreachable: false,
               lastUpdated: Date.now(),
@@ -318,6 +325,7 @@ export function useNodeData(
             processes: procs,
             cores,
             netInterfaces: netIfaces,
+            diskHealth,
             loading: false,
             unreachable: false,
             lastUpdated: Date.now(),

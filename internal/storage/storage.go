@@ -160,6 +160,35 @@ CREATE TABLE IF NOT EXISTS node_alias (
     alias            TEXT NOT NULL,
     advertised_alias TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS raid_array (
+    node           TEXT NOT NULL,
+    name           TEXT NOT NULL,
+    level          TEXT NOT NULL,
+    state          TEXT NOT NULL,
+    total_devices  INTEGER NOT NULL,
+    active_devices INTEGER NOT NULL,
+    resync_percent REAL NOT NULL,
+    detail         TEXT NOT NULL,
+    at             INTEGER NOT NULL,
+    PRIMARY KEY (node, name)
+);
+CREATE TABLE IF NOT EXISTS smart_disk (
+    node              TEXT NOT NULL,
+    device            TEXT NOT NULL,
+    model             TEXT NOT NULL,
+    serial            TEXT NOT NULL,
+    health            TEXT NOT NULL,
+    reallocated       INTEGER NOT NULL,
+    pending           INTEGER NOT NULL,
+    uncorrectable     INTEGER NOT NULL,
+    crc_errors        INTEGER NOT NULL,
+    temp_c            INTEGER NOT NULL,
+    power_on_hours    INTEGER NOT NULL,
+    power_cycle_count INTEGER NOT NULL,
+    source_at         INTEGER NOT NULL,
+    at                INTEGER NOT NULL,
+    PRIMARY KEY (node, device)
+);
 CREATE TABLE IF NOT EXISTS user (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     username      TEXT NOT NULL UNIQUE,

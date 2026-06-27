@@ -83,6 +83,7 @@ func New(cfg Config) http.Handler {
 	mux.Handle("GET /api/peer/cpu", s.requireSecret(http.HandlerFunc(s.handlePeerCPUState)))
 	mux.Handle("GET /api/peer/cpu/cores", s.requireSecret(http.HandlerFunc(s.handlePeerCPUCores)))
 	mux.Handle("GET /api/peer/diskio", s.requireSecret(http.HandlerFunc(s.handlePeerDiskIO)))
+	mux.Handle("GET /api/peer/diskhealth", s.requireSecret(http.HandlerFunc(s.handlePeerDiskHealth)))
 	mux.Handle("GET /api/peer/processes", s.requireSecret(http.HandlerFunc(s.handlePeerProcesses)))
 
 	// Cross-node alert dedup: peers claim an incident and announce delivery here
@@ -166,6 +167,7 @@ func (s *server) registerDashboardRoutes(mux *http.ServeMux) {
 	protect("GET /api/nodes/{name}/network/interfaces", s.handleNetInterfaces)
 	protect("GET /api/nodes/{name}/diskio", s.handleDiskIO)
 	protect("GET /api/nodes/{name}/diskio/history", s.handleDiskIOHistory)
+	protect("GET /api/nodes/{name}/diskhealth", s.handleDiskHealth)
 	protect("GET /api/nodes/{name}/processes", s.handleProcesses)
 
 	// Alert activity for a node: what is firing right now (from the engine's live
@@ -996,6 +998,123 @@ func (s *server) handleProcesses(w http.ResponseWriter, r *http.Request) {
 // handlePeerProcesses returns this node's own top processes to a peer.
 func (s *server) handlePeerProcesses(w http.ResponseWriter, r *http.Request) {
 	out, err := s.processesForNode(s.cfg.NodeName)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// --- Disk health (RAID + SMART) ---
+
+// raidArrayDTO is one software-RAID array's current state. Informational only.
+type raidArrayDTO struct {
+	Name          string  `json:"name"`
+	Level         string  `json:"level"`
+	State         string  `json:"state"` // clean | degraded | rebuilding | failed
+	TotalDevices  int     `json:"total_devices"`
+	ActiveDevices int     `json:"active_devices"`
+	ResyncPercent float64 `json:"resync_percent"`
+	Detail        string  `json:"detail"`
+	At            string  `json:"at"`
+}
+
+// smartDiskDTO is one disk's SMART health. Rollup (ok|warn|fail) and Stale are
+// computed here so the UI can color the row and flag old external data without
+// re-deriving the rules. Stale applies to SMART only — RAID is read live.
+type smartDiskDTO struct {
+	Device          string `json:"device"`
+	Model           string `json:"model"`
+	Serial          string `json:"serial"`
+	Health          string `json:"health"`
+	Rollup          string `json:"rollup"` // ok | warn | fail
+	Reallocated     uint64 `json:"reallocated"`
+	Pending         uint64 `json:"pending"`
+	Uncorrectable   uint64 `json:"uncorrectable"`
+	CRCErrors       uint64 `json:"crc_errors"`
+	TempC           int    `json:"temp_c"`
+	PowerOnHours    uint64 `json:"power_on_hours"`
+	PowerCycleCount uint64 `json:"power_cycle_count"`
+	SourceAt        string `json:"source_at"`
+	Stale           bool   `json:"stale"`
+	At              string `json:"at"`
+}
+
+// diskHealthDTO bundles a node's RAID and SMART state. Both fields are always
+// arrays (never null) so the client can test each subsection's length to hide it
+// independently — RAID and SMART are independent data sources.
+type diskHealthDTO struct {
+	Raid  []raidArrayDTO `json:"raid"`
+	Smart []smartDiskDTO `json:"smart"`
+}
+
+// smartStaleAfter is how old SMART data may be before it is flagged stale. The
+// external collector typically refreshes every few minutes; 30m tolerates a
+// missed run or two without crying wolf.
+const smartStaleAfter = 30 * time.Minute
+
+// diskHealthForNode builds the RAID + SMART view for a node from stored
+// snapshots. The two sources are assembled separately and each defaults to an
+// empty (non-nil) slice so a source that simply isn't present yields [].
+func (s *server) diskHealthForNode(name string) (diskHealthDTO, error) {
+	out := diskHealthDTO{Raid: []raidArrayDTO{}, Smart: []smartDiskDTO{}}
+
+	raid, err := s.cfg.DB.RaidArrays(name)
+	if err != nil {
+		return diskHealthDTO{}, err
+	}
+	for _, r := range raid {
+		out.Raid = append(out.Raid, raidArrayDTO{
+			Name:          r.Name,
+			Level:         r.Level,
+			State:         r.State,
+			TotalDevices:  r.TotalDevices,
+			ActiveDevices: r.ActiveDevices,
+			ResyncPercent: r.ResyncPercent,
+			Detail:        r.Detail,
+			At:            r.At.UTC().Format(time.RFC3339),
+		})
+	}
+
+	smart, err := s.cfg.DB.SmartDisks(name)
+	if err != nil {
+		return diskHealthDTO{}, err
+	}
+	now := time.Now().UTC()
+	for _, d := range smart {
+		out.Smart = append(out.Smart, smartDiskDTO{
+			Device:          d.Device,
+			Model:           d.Model,
+			Serial:          d.Serial,
+			Health:          d.Health,
+			Rollup:          metrics.RollupHealth(d.Health, d.Reallocated, d.Pending, d.Uncorrectable, d.TempC),
+			Reallocated:     d.Reallocated,
+			Pending:         d.Pending,
+			Uncorrectable:   d.Uncorrectable,
+			CRCErrors:       d.CRCErrors,
+			TempC:           d.TempC,
+			PowerOnHours:    d.PowerOnHours,
+			PowerCycleCount: d.PowerCycleCount,
+			SourceAt:        d.SourceAt.UTC().Format(time.RFC3339),
+			Stale:           now.Sub(d.SourceAt) > smartStaleAfter,
+			At:              d.At.UTC().Format(time.RFC3339),
+		})
+	}
+	return out, nil
+}
+
+func (s *server) handleDiskHealth(w http.ResponseWriter, r *http.Request) {
+	out, err := s.diskHealthForNode(r.PathValue("name"))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handlePeerDiskHealth returns this node's own RAID + SMART state to a peer.
+func (s *server) handlePeerDiskHealth(w http.ResponseWriter, r *http.Request) {
+	out, err := s.diskHealthForNode(s.cfg.NodeName)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

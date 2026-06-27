@@ -123,6 +123,75 @@ func (c *Collector) sampleOnce(ctx context.Context) {
 	c.sampleCPUCores(ctx, at)
 	c.sampleDiskIO(ctx, at)
 	c.sampleProcesses(ctx, at)
+	c.sampleDiskHealth(ctx, at)
+}
+
+// sampleDiskHealth records the local node's software-RAID and SMART state as two
+// independent replace-on-write snapshots. RAID (/proc/mdstat) and SMART (an
+// external root-written file) are kept strictly separate: each can be present or
+// absent on its own, and clearing one never touches the other. Both are cheap
+// file reads — SMART is slow-moving, but reading the small file each cycle is
+// negligible, so no slower cadence is needed. Errors are logged, never fatal.
+func (c *Collector) sampleDiskHealth(ctx context.Context, at time.Time) {
+	// RAID: read live each cycle. An empty slice (no mdadm, or no arrays) clears
+	// the node's rows so the dashboard hides the RAID subsection.
+	if arrays, err := metrics.ReadRaidArrays(); err != nil {
+		log.Printf("collector: raid sample failed: %v", err)
+	} else {
+		rows := make([]storage.RaidArrayRow, 0, len(arrays))
+		for _, a := range arrays {
+			rows = append(rows, storage.RaidArrayRow{
+				Node:          c.node,
+				Name:          a.Name,
+				Level:         a.Level,
+				State:         a.State,
+				TotalDevices:  a.TotalDevices,
+				ActiveDevices: a.ActiveDevices,
+				ResyncPercent: a.ResyncPercent,
+				Detail:        a.Detail,
+				At:            at,
+			})
+		}
+		if err := c.db.ReplaceRaidArrays(c.node, rows); err != nil {
+			log.Printf("collector: raid persist failed: %v", err)
+		}
+	}
+
+	// SMART: read the external file. When it is absent, clear the node's rows
+	// (nil) so the dashboard hides the SMART subsection — independently of RAID.
+	report, err := metrics.ReadSmart()
+	if err != nil {
+		log.Printf("collector: smart sample failed: %v", err)
+		return
+	}
+	if !report.Present {
+		if err := c.db.ReplaceSmartDisks(c.node, nil); err != nil {
+			log.Printf("collector: smart clear failed: %v", err)
+		}
+		return
+	}
+	rows := make([]storage.SmartDiskRow, 0, len(report.Disks))
+	for _, d := range report.Disks {
+		rows = append(rows, storage.SmartDiskRow{
+			Node:            c.node,
+			Device:          d.Device,
+			Model:           d.Model,
+			Serial:          d.Serial,
+			Health:          d.Health,
+			Reallocated:     d.Reallocated,
+			Pending:         d.Pending,
+			Uncorrectable:   d.Uncorrectable,
+			CRCErrors:       d.CRCErrors,
+			TempC:           d.TempC,
+			PowerOnHours:    d.PowerOnHours,
+			PowerCycleCount: d.PowerCycleCount,
+			SourceAt:        report.SourceAt,
+			At:              at,
+		})
+	}
+	if err := c.db.ReplaceSmartDisks(c.node, rows); err != nil {
+		log.Printf("collector: smart persist failed: %v", err)
+	}
 }
 
 // sampleDisks records current usage per mount and returns the highest usage

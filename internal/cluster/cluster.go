@@ -104,6 +104,42 @@ type peerProcess struct {
 	At         string  `json:"at"`
 }
 
+// peerRaidArray mirrors one element of the "raid" array in /api/peer/diskhealth.
+type peerRaidArray struct {
+	Name          string  `json:"name"`
+	Level         string  `json:"level"`
+	State         string  `json:"state"`
+	TotalDevices  int     `json:"total_devices"`
+	ActiveDevices int     `json:"active_devices"`
+	ResyncPercent float64 `json:"resync_percent"`
+	Detail        string  `json:"detail"`
+	At            string  `json:"at"`
+}
+
+// peerSmartDisk mirrors one element of the "smart" array in /api/peer/diskhealth.
+type peerSmartDisk struct {
+	Device          string `json:"device"`
+	Model           string `json:"model"`
+	Serial          string `json:"serial"`
+	Health          string `json:"health"`
+	Reallocated     uint64 `json:"reallocated"`
+	Pending         uint64 `json:"pending"`
+	Uncorrectable   uint64 `json:"uncorrectable"`
+	CRCErrors       uint64 `json:"crc_errors"`
+	TempC           int    `json:"temp_c"`
+	PowerOnHours    uint64 `json:"power_on_hours"`
+	PowerCycleCount uint64 `json:"power_cycle_count"`
+	SourceAt        string `json:"source_at"`
+	At              string `json:"at"`
+}
+
+// peerDiskHealth mirrors /api/peer/diskhealth (RAID + SMART, two independent
+// arrays).
+type peerDiskHealth struct {
+	Raid  []peerRaidArray `json:"raid"`
+	Smart []peerSmartDisk `json:"smart"`
+}
+
 // peerCore mirrors one element of /api/peer/cpu/cores.
 type peerCore struct {
 	Core    int     `json:"core"`
@@ -337,6 +373,7 @@ func (p *Poller) pollPeer(ctx context.Context, peer storage.Peer) {
 	p.storePeerCPUCores(ctx, peer)
 	p.storePeerDiskIO(ctx, peer)
 	p.storePeerProcesses(ctx, peer)
+	p.storePeerDiskHealth(ctx, peer)
 	p.storePeerIdentity(ctx, peer)
 
 	_ = p.db.SetPeerStatus(peer.Name, "ok", time.Now().UTC(), "")
@@ -512,6 +549,67 @@ func (p *Poller) storePeerProcesses(ctx context.Context, peer storage.Peer) {
 		})
 	}
 	_ = p.db.ReplaceProcessTop(peer.Name, samples)
+}
+
+// storePeerDiskHealth fetches a peer's RAID + SMART state and records each under
+// the peer's name, replacing the previous snapshots. RAID and SMART are stored
+// via separate replace-on-write calls, so an empty array for one source clears
+// only that source's rows — preserving their independence. Best-effort: a
+// failure does not affect the rest of the poll.
+func (p *Poller) storePeerDiskHealth(ctx context.Context, peer storage.Peer) {
+	var dh peerDiskHealth
+	if err := p.getJSON(ctx, peer, "/api/peer/diskhealth", &dh); err != nil {
+		return
+	}
+
+	raid := make([]storage.RaidArrayRow, 0, len(dh.Raid))
+	for _, r := range dh.Raid {
+		at, perr := time.Parse(time.RFC3339, r.At)
+		if perr != nil {
+			at = time.Now().UTC()
+		}
+		raid = append(raid, storage.RaidArrayRow{
+			Node:          peer.Name,
+			Name:          r.Name,
+			Level:         r.Level,
+			State:         r.State,
+			TotalDevices:  r.TotalDevices,
+			ActiveDevices: r.ActiveDevices,
+			ResyncPercent: r.ResyncPercent,
+			Detail:        r.Detail,
+			At:            at,
+		})
+	}
+	_ = p.db.ReplaceRaidArrays(peer.Name, raid)
+
+	smart := make([]storage.SmartDiskRow, 0, len(dh.Smart))
+	for _, d := range dh.Smart {
+		at, perr := time.Parse(time.RFC3339, d.At)
+		if perr != nil {
+			at = time.Now().UTC()
+		}
+		sourceAt, serr := time.Parse(time.RFC3339, d.SourceAt)
+		if serr != nil {
+			sourceAt = at
+		}
+		smart = append(smart, storage.SmartDiskRow{
+			Node:            peer.Name,
+			Device:          d.Device,
+			Model:           d.Model,
+			Serial:          d.Serial,
+			Health:          d.Health,
+			Reallocated:     d.Reallocated,
+			Pending:         d.Pending,
+			Uncorrectable:   d.Uncorrectable,
+			CRCErrors:       d.CRCErrors,
+			TempC:           d.TempC,
+			PowerOnHours:    d.PowerOnHours,
+			PowerCycleCount: d.PowerCycleCount,
+			SourceAt:        sourceAt,
+			At:              at,
+		})
+	}
+	_ = p.db.ReplaceSmartDisks(peer.Name, smart)
 }
 
 // storePeerIdentity caches a peer's self-advertised display name under that
