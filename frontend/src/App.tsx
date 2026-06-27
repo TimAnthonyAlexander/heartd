@@ -15,6 +15,7 @@ import { ChecksTable } from './components/ChecksTable'
 import { ProcessTable } from './components/ProcessTable'
 import { NetInterfacesPanel } from './components/NetInterfacesPanel'
 import { AlertsPanel } from './components/AlertsPanel'
+import { DashboardSection } from './components/DashboardSection'
 import { NodeConfig, type ConfigTab, type EditTarget } from './components/NodeConfig'
 import { SegmentedTabs, type TabItem } from './components/SegmentedTabs'
 import { RenameDialog } from './components/RenameDialog'
@@ -167,66 +168,82 @@ export default function App({ username, onLogout }: AppProps) {
                 </Box>
               )}
 
-              <Box
-                sx={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-                  gap: 2.5,
-                  mb: 4,
-                }}
-              >
-                {data.loading && !m ? (
-                  <>
-                    <PanelSkeleton />
-                    <PanelSkeleton />
-                  </>
-                ) : m ? (
-                  <>
-                    <MetricPanel
-                      title="CPU"
-                      headline={`${m.cpu_percent.toFixed(1)}%`}
-                      percent={m.cpu_percent}
-                      data={data.series.map((p) => ({ t: p.t, v: p.cpu }))}
-                      dimmed={data.unreachable}
-                    />
-                    <CPUBreakdownPanel
-                      state={data.cpuState}
-                      series={data.cpuStateSeries}
-                      dimmed={data.unreachable}
-                    />
-                    <PerCorePanel cores={data.cores} dimmed={data.unreachable} />
-                    <MetricPanel
-                      title="Memory"
-                      headline={`${formatGB(m.mem_used)} / ${formatGB(m.mem_total)} GB`}
-                      percent={m.mem_percent}
-                      data={data.series.map((p) => ({ t: p.t, v: p.memPct }))}
-                      dimmed={data.unreachable}
-                    />
-                    {m.swap_total > 0 && (
-                      <SwapPanel
-                        used={m.swap_used}
-                        total={m.swap_total}
-                        percent={m.swap_percent}
+              {/* Metric charts, grouped into balanced sections so rows always
+                  fill evenly (no orphan card) and the page reads top-down. */}
+              {data.loading && !m ? (
+                <Box
+                  sx={{
+                    display: 'grid',
+                    gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' },
+                    gap: 2.5,
+                    mb: 4,
+                  }}
+                >
+                  <PanelSkeleton />
+                  <PanelSkeleton />
+                  <PanelSkeleton />
+                </Box>
+              ) : (
+                <>
+                  {m && (
+                    <DashboardSection title="CPU" columns={3}>
+                      <MetricPanel
+                        title="CPU"
+                        headline={`${m.cpu_percent.toFixed(1)}%`}
+                        percent={m.cpu_percent}
+                        data={data.series.map((p) => ({ t: p.t, v: p.cpu }))}
                         dimmed={data.unreachable}
                       />
-                    )}
-                    <LoadPanel
-                      load1={m.load1}
-                      load5={m.load5}
-                      load15={m.load15}
-                      series={data.series}
-                      dimmed={data.unreachable}
-                    />
-                  </>
-                ) : null}
-                <DiskPanel disks={data.disk} dimmed={data.unreachable} />
-                <NetworkPanel net={data.net} series={data.netSeries} dimmed={data.unreachable} />
-                <DiskIOPanel io={data.diskio} series={data.diskioSeries} dimmed={data.unreachable} />
-              </Box>
+                      <CPUBreakdownPanel
+                        state={data.cpuState}
+                        series={data.cpuStateSeries}
+                        dimmed={data.unreachable}
+                      />
+                      <PerCorePanel cores={data.cores} dimmed={data.unreachable} />
+                    </DashboardSection>
+                  )}
 
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <ProcessTable processes={data.processes} dimmed={data.unreachable} />
-                <NetInterfacesPanel interfaces={data.netInterfaces} dimmed={data.unreachable} />
+                  {/* The Memory section reflows 3<->2 cleanly: Swap only appears
+                      when the node has swap, and the column count follows it. */}
+                  {m && (
+                    <DashboardSection title="Memory" columns={m.swap_total > 0 ? 3 : 2}>
+                      <MetricPanel
+                        title="Memory"
+                        headline={`${formatGB(m.mem_used)} / ${formatGB(m.mem_total)} GB`}
+                        percent={m.mem_percent}
+                        data={data.series.map((p) => ({ t: p.t, v: p.memPct }))}
+                        dimmed={data.unreachable}
+                      />
+                      {m.swap_total > 0 && (
+                        <SwapPanel
+                          used={m.swap_used}
+                          total={m.swap_total}
+                          percent={m.swap_percent}
+                          dimmed={data.unreachable}
+                        />
+                      )}
+                      <LoadPanel
+                        load1={m.load1}
+                        load5={m.load5}
+                        load15={m.load15}
+                        series={data.series}
+                        dimmed={data.unreachable}
+                      />
+                    </DashboardSection>
+                  )}
+
+                  <DashboardSection title="Storage & Network" columns={3}>
+                    <DiskPanel disks={data.disk} dimmed={data.unreachable} />
+                    <DiskIOPanel io={data.diskio} series={data.diskioSeries} dimmed={data.unreachable} />
+                    <NetworkPanel net={data.net} series={data.netSeries} dimmed={data.unreachable} />
+                  </DashboardSection>
+                </>
+              )}
+
+              {/* Operational view: what a monitor exists to surface — Checks and
+                  Alerts (firing now / recent activity / rules) — sit directly
+                  under the charts, side-by-side on wide screens, stacked below lg. */}
+              <DashboardSection columns={2} breakpoint="lg" gap={4} align="start">
                 <ChecksTable
                   checks={data.checks}
                   onEdit={(name) => requestEdit({ kind: 'check', name })}
@@ -237,7 +254,14 @@ export default function App({ username, onLogout }: AppProps) {
                   history={alertActivity.history}
                   onEdit={(id) => requestEdit({ kind: 'alert', id })}
                 />
-              </Box>
+              </DashboardSection>
+
+              {/* Reference tables: the heavier per-process and per-NIC views
+                  come last, also paired 50/50 and stacking below lg. */}
+              <DashboardSection columns={2} breakpoint="lg" gap={4} align="start">
+                <ProcessTable processes={data.processes} dimmed={data.unreachable} />
+                <NetInterfacesPanel interfaces={data.netInterfaces} dimmed={data.unreachable} />
+              </DashboardSection>
             </>
           ) : selected ? (
             <NodeConfig
