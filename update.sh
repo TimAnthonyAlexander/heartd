@@ -575,12 +575,18 @@ if [ "$ELF_MAGIC" != "7f454c46" ]; then
   die "$BINARY is not a Linux ELF binary (magic: ${ELF_MAGIC:-empty}). Use the linux/${ARCH} build (make cross)."
 fi
 
-# Determine the port for the health check: explicit flag wins, else parse the
-# unit's ExecStart (-addr 127.0.0.1:PORT), else fall back to 9300.
-if [ -z "$PORT" ]; then
-  PORT="$(grep -oE -- '-addr[= ]+127\.0\.0\.1:[0-9]+' "$UNIT_FILE" | grep -oE '[0-9]+$' | head -n1 || true)"
-  PORT="${PORT:-9300}"
-fi
+# Determine where to health-check: parse the unit's ExecStart "-addr HOST:PORT".
+# heartd may be bound to a non-loopback address (e.g. a VLAN IP so peers can
+# reach it), so we must probe the host it actually listens on — NOT a hardcoded
+# 127.0.0.1, which would always fail and trigger a needless rollback. An explicit
+# --port flag still overrides the parsed port. Wildcard/empty binds → loopback.
+ADDR="$(grep -oE -- '-addr[= ]+[^ ]+' "$UNIT_FILE" 2>/dev/null | head -n1 | sed -E 's/-addr[= ]+//' || true)"
+HEALTH_HOST="${ADDR%:*}"
+[ -z "$PORT" ] && PORT="${ADDR##*:}"
+PORT="${PORT:-9300}"
+case "$HEALTH_HOST" in
+  "" | "0.0.0.0" | "::" | "[::]" | "*") HEALTH_HOST="127.0.0.1" ;;
+esac
 
 # Try to read current vs incoming version (best-effort; heartd may not support --version).
 CUR_VER="$("$PREFIX_BIN" --version 2>/dev/null | head -n1 || true)"
@@ -590,7 +596,7 @@ c_blue "heartd updater"
 info "current:   $PREFIX_BIN${CUR_VER:+  ($CUR_VER)}"
 info "new:       $BINARY${NEW_VER:+  ($NEW_VER)}"
 info "arch:      $ARCH"
-info "health:    http://127.0.0.1:${PORT}/api/health"
+info "health:    http://${HEALTH_HOST}:${PORT}/api/health"
 echo
 
 # Confirm before swapping. An interactive run asks; a piped one-liner or --yes
@@ -655,7 +661,7 @@ $SUDO systemctl start heartd
 if command -v curl >/dev/null 2>&1; then
   ok="no"
   for _ in 1 2 3 4 5; do
-    if curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
+    if curl -fsS "http://${HEALTH_HOST}:${PORT}/api/health" >/dev/null 2>&1; then
       ok="yes"
       break
     fi
@@ -663,7 +669,7 @@ if command -v curl >/dev/null 2>&1; then
   done
   if [ "$ok" = "yes" ]; then
     echo
-    c_green "heartd is responding on http://127.0.0.1:${PORT} — update complete."
+    c_green "heartd is responding on http://${HEALTH_HOST}:${PORT} — update complete."
     [ -n "$BACKUP" ] && info "Previous binary kept at $BACKUP (remove once you're happy)."
     info "Logs: journalctl -u heartd -f"
     # Keep the optional SMART collector current / offer it (asks first).

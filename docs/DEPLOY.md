@@ -167,5 +167,14 @@ Static, CGO-free builds for linux/darwin × amd64/arm64. Verify with `SHA256SUMS
   config-format change in the notes (and bump MINOR/MAJOR accordingly).
 - **Tag points at what you built.** Push the commit *before* `gh release create`
   so `--target main` resolves to the exact tree you cross-compiled.
+- **`update.sh`/`install.sh` health-check the address heartd actually binds.**
+  A node may be started with `-addr <host>:<port>` bound to something other than
+  loopback — e.g. a private/VLAN IP so cluster peers can poll it. The post-swap
+  health probe therefore parses `-addr HOST:PORT` from the systemd unit and
+  probes *that* host (wildcard/empty binds → `127.0.0.1`). Do **not** reintroduce
+  a hardcoded `http://127.0.0.1:PORT` probe: on a non-loopback bind it always
+  fails, and since `update.sh` rolls back on a failed probe, a perfectly good
+  update would be reverted. (Regression fixed once already — see the `-addr`
+  parser near the top of the "Determine where to health-check" block.)
 </content>
 </invoke>
