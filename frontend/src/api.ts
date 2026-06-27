@@ -237,6 +237,18 @@ export interface DiskMount {
   total: number
   percent: number
   at: string
+  // Fill-rate forecast, present only when the mount's recent capacity trend
+  // supports a projection; absent means stable or not enough history yet.
+  full_eta_seconds?: number
+  full_at?: string // RFC3339, projected time of 100% full
+}
+
+// One mount's capacity reading at an instant, as charted in the capacity history.
+export interface DiskUsageHistoryPoint {
+  used: number
+  total: number
+  percent: number
+  at: string
 }
 
 export interface NetCurrent {
@@ -255,6 +267,21 @@ export interface NetHistoryPoint {
 
 export function fetchDisk(nodeName: string, signal?: AbortSignal): Promise<DiskMount[]> {
   return getJSON<DiskMount[]>(`/api/nodes/${encodeURIComponent(nodeName)}/disk`, signal)
+}
+
+// Capacity history for a single mount over an absolute [fromSec, toSec] epoch
+// window; the server downsamples it to a bounded number of points.
+export function fetchDiskUsageHistory(
+  nodeName: string,
+  mount: string,
+  fromSec: number,
+  toSec: number,
+  signal?: AbortSignal,
+): Promise<DiskUsageHistoryPoint[]> {
+  return getJSON<DiskUsageHistoryPoint[]>(
+    `/api/nodes/${encodeURIComponent(nodeName)}/disk/history?mount=${encodeURIComponent(mount)}&from=${fromSec}&to=${toSec}`,
+    signal,
+  )
 }
 
 export function fetchNetwork(nodeName: string, signal?: AbortSignal): Promise<NetCurrent | null> {

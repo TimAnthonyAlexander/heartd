@@ -80,6 +80,16 @@ CREATE TABLE IF NOT EXISTS disk_status (
     at      INTEGER NOT NULL,
     PRIMARY KEY (node, mount)
 );
+CREATE TABLE IF NOT EXISTS disk_usage_sample (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    node    TEXT NOT NULL,
+    mount   TEXT NOT NULL,
+    used    INTEGER NOT NULL,
+    total   INTEGER NOT NULL,
+    percent REAL NOT NULL,
+    at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_disk_usage_sample_node_mount_at ON disk_usage_sample(node, mount, at);
 CREATE TABLE IF NOT EXISTS net_sample (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     node       TEXT NOT NULL,

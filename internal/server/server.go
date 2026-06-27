@@ -159,6 +159,7 @@ func (s *server) registerDashboardRoutes(mux *http.ServeMux) {
 	protect("GET /api/nodes/{name}/cpu/cores", s.handleCPUCores)
 	protect("GET /api/nodes/{name}/checks", s.handleChecks)
 	protect("GET /api/nodes/{name}/disk", s.handleDisk)
+	protect("GET /api/nodes/{name}/disk/history", s.handleDiskUsageHistory)
 	protect("GET /api/nodes/{name}/network", s.handleNetwork)
 	protect("GET /api/nodes/{name}/network/history", s.handleNetworkHistory)
 	protect("GET /api/nodes/{name}/diskio", s.handleDiskIO)
@@ -577,14 +578,33 @@ func historyWindow(r *http.Request) (time.Time, time.Time, bool) {
 	return from, to, true
 }
 
-// diskDTO is one mount's current usage.
+// diskDTO is one mount's current usage, optionally annotated with a fill-rate
+// forecast. FullETASeconds/FullAt are present (non-omitted) only when the mount's
+// recent capacity trend supports a "full in ~N" projection; their absence means
+// the mount is stable or there isn't enough history yet.
 type diskDTO struct {
-	Mount   string  `json:"mount"`
+	Mount          string  `json:"mount"`
+	Used           uint64  `json:"used"`
+	Total          uint64  `json:"total"`
+	Percent        float64 `json:"percent"`
+	At             string  `json:"at"`
+	FullETASeconds int64   `json:"full_eta_seconds,omitempty"`
+	FullAt         string  `json:"full_at,omitempty"` // RFC3339, projected time of 100% full
+}
+
+// diskUsageHistoryPoint is one mount's capacity reading at an instant, as charted
+// in the dashboard's capacity history view.
+type diskUsageHistoryPoint struct {
 	Used    uint64  `json:"used"`
 	Total   uint64  `json:"total"`
 	Percent float64 `json:"percent"`
 	At      string  `json:"at"`
 }
+
+// diskForecastLookback is how far back the fill-rate regression reaches. A day of
+// samples balances responsiveness to a recent fill spike against the noise of a
+// too-short window; if less history exists, whatever is present is used.
+const diskForecastLookback = 24 * time.Hour
 
 // netDTO is a node's latest network throughput.
 type netDTO struct {
@@ -650,12 +670,23 @@ func (s *server) diskForNode(name string) ([]diskDTO, error) {
 	if err != nil {
 		return nil, err
 	}
+	since := time.Now().UTC().Add(-diskForecastLookback)
 	out := make([]diskDTO, 0, len(rows))
 	for _, d := range rows {
-		out = append(out, diskDTO{
+		dto := diskDTO{
 			Mount: d.Mount, Used: d.Used, Total: d.Total, Percent: d.Percent,
 			At: d.At.UTC().Format(time.RFC3339),
-		})
+		}
+		// Annotate with a fill-rate forecast when the mount's recent capacity
+		// trend supports one. This runs uniformly for local and peer nodes
+		// because the poller accumulates peer capacity history locally.
+		if points, err := s.cfg.DB.RecentDiskUsage(name, d.Mount, since); err == nil {
+			if eta, ok := fillForecast(points); ok {
+				dto.FullETASeconds = eta
+				dto.FullAt = time.Now().UTC().Add(time.Duration(eta) * time.Second).Format(time.RFC3339)
+			}
+		}
+		out = append(out, dto)
 	}
 	return out, nil
 }
@@ -677,6 +708,40 @@ func (s *server) handleDisk(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleDiskUsageHistory returns capacity points for a single mount on a node
+// within a recent window. The mount is selected by the required `mount` query
+// param; the window comes from historyWindow's from/to (epoch seconds). History
+// is reconstructed locally by the poller, so this serves local and peer nodes
+// alike with no peer endpoint.
+func (s *server) handleDiskUsageHistory(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	mount := r.URL.Query().Get("mount")
+	if mount == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mount is required"})
+		return
+	}
+
+	from, to, ok := historyWindow(r)
+	if !ok {
+		minutes := queryInt(r, "minutes", 60)
+		to = time.Now().UTC()
+		from = to.Add(-time.Duration(minutes) * time.Minute)
+	}
+	points, err := s.cfg.DB.DiskUsageWindow(name, mount, from, to, maxHistoryPoints)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	out := make([]diskUsageHistoryPoint, 0, len(points))
+	for _, p := range points {
+		out = append(out, diskUsageHistoryPoint{
+			Used: p.Used, Total: p.Total, Percent: p.Percent,
+			At: p.At.UTC().Format(time.RFC3339),
+		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

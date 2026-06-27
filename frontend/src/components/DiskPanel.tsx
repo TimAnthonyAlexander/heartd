@@ -13,6 +13,29 @@ function formatGB(bytes: number): string {
   return `${gb.toFixed(0)} GB`
 }
 
+const MINUTE = 60
+const HOUR = 60 * MINUTE
+const DAY = 24 * HOUR
+const WEEK = 7 * DAY
+
+// formatETA renders a seconds-until-full value as a compact human span: "~45m",
+// "~5h", "~3d", "~2w". It picks the coarsest unit that reads cleanly.
+function formatETA(seconds: number): string {
+  if (seconds >= WEEK) return `~${Math.round(seconds / WEEK)}w`
+  if (seconds >= DAY) return `~${Math.round(seconds / DAY)}d`
+  if (seconds >= HOUR) return `~${Math.round(seconds / HOUR)}h`
+  if (seconds >= MINUTE) return `~${Math.round(seconds / MINUTE)}m`
+  return '<1m'
+}
+
+// forecastColor escalates as the disk gets closer to full: error within ~2 days,
+// warn within ~7 days, else the mount's own usage color.
+function forecastColor(seconds: number, percent: number): string {
+  if (seconds < 2 * DAY) return colors.error
+  if (seconds < WEEK) return colors.warn
+  return percentColor(percent)
+}
+
 export function DiskPanel({ disks, dimmed }: Props) {
   return (
     <Paper elevation={0} sx={{ p: 3, borderRadius: 2.5, opacity: dimmed ? 0.45 : 1, minHeight: 240 }}>
@@ -51,6 +74,18 @@ export function DiskPanel({ disks, dimmed }: Props) {
                     '& .MuiLinearProgress-bar': { bgcolor: color, borderRadius: 3 },
                   }}
                 />
+                {d.full_eta_seconds != null && (
+                  <Typography
+                    sx={{
+                      mt: 0.5,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: forecastColor(d.full_eta_seconds, d.percent),
+                    }}
+                  >
+                    fills in {formatETA(d.full_eta_seconds)}
+                  </Typography>
+                )}
               </Box>
             )
           })}

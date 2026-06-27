@@ -345,6 +345,11 @@ func (p *Poller) storePeerDisk(ctx context.Context, peer storage.Peer) {
 		_ = p.db.UpsertDiskStatus(storage.DiskStatus{
 			Node: peer.Name, Mount: d.Mount, Used: d.Used, Total: d.Total, Percent: d.Percent, At: at,
 		})
+		// Accumulate peer capacity history locally so the same fill-rate forecast
+		// path runs for peers as for the local node.
+		_ = p.db.InsertDiskUsageSample(storage.DiskUsageSample{
+			Node: peer.Name, Mount: d.Mount, Used: d.Used, Total: d.Total, Percent: d.Percent, At: at,
+		})
 	}
 	// Drop stale peer mounts no longer reported.
 	_ = p.db.DeleteDiskStatusesExcept(peer.Name, mounts)

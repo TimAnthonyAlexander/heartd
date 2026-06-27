@@ -144,6 +144,18 @@ func (c *Collector) sampleDisks(ctx context.Context, at time.Time) float64 {
 		}); err != nil {
 			log.Printf("collector: disk persist failed: %v", err)
 		}
+		// Also append a capacity-history row so a fill-rate forecast can be
+		// regressed from the mount's trend (disk_status is a snapshot only).
+		if err := c.db.InsertDiskUsageSample(storage.DiskUsageSample{
+			Node:    c.node,
+			Mount:   d.Mount,
+			Used:    d.Used,
+			Total:   d.Total,
+			Percent: d.Percent,
+			At:      at,
+		}); err != nil {
+			log.Printf("collector: disk usage history persist failed: %v", err)
+		}
 	}
 	// Drop any mounts that are no longer present (or now filtered out).
 	if err := c.db.DeleteDiskStatusesExcept(c.node, mounts); err != nil {
@@ -438,6 +450,9 @@ func (c *Collector) prune() {
 	}
 	if _, err := c.db.PruneDiskIO(before); err != nil {
 		log.Printf("collector: prune disk io failed: %v", err)
+	}
+	if _, err := c.db.PruneDiskUsage(before); err != nil {
+		log.Printf("collector: prune disk usage failed: %v", err)
 	}
 	if _, err := c.db.PruneAlertEvents(before); err != nil {
 		log.Printf("collector: prune alert events failed: %v", err)
