@@ -29,6 +29,10 @@ type checkInput struct {
 	Process     string `json:"process"`
 	Command     string `json:"command"`
 	Enabled     bool   `json:"enabled"`
+
+	AcceptAny        bool   `json:"accept_any"`
+	AcceptedStatuses []int  `json:"accepted_statuses"`
+	UserAgent        string `json:"user_agent"`
 }
 
 func (c checkInput) toSettings() settings.Check {
@@ -38,6 +42,9 @@ func (c checkInput) toSettings() settings.Check {
 		Timeout:  time.Duration(c.TimeoutSec) * time.Second,
 		URL:      c.URL, Method: c.Method, Host: c.Host, Port: c.Port,
 		Process: c.Process, Command: c.Command, Enabled: c.Enabled,
+		AcceptAny:        c.AcceptAny,
+		AcceptedStatuses: c.AcceptedStatuses,
+		UserAgent:        c.UserAgent,
 	}
 }
 
@@ -48,6 +55,9 @@ func checkToOutput(c settings.Check) checkInput {
 		TimeoutSec:  int64(c.Timeout.Seconds()),
 		URL:         c.URL, Method: c.Method, Host: c.Host, Port: c.Port,
 		Process: c.Process, Command: c.Command, Enabled: c.Enabled,
+		AcceptAny:        c.AcceptAny,
+		AcceptedStatuses: c.AcceptedStatuses,
+		UserAgent:        c.UserAgent,
 	}
 }
 

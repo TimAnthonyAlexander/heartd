@@ -24,6 +24,13 @@ type CheckConfig struct {
 	Process     string
 	Command     string
 	Enabled     bool
+	// AcceptAny, when true (http only), treats any HTTP response as healthy.
+	AcceptAny bool
+	// AcceptedStatuses is a comma-joined list of accepted HTTP status codes
+	// (http only), e.g. "200,401,403". Empty means the 2xx default.
+	AcceptedStatuses string
+	// UserAgent overrides the default health-check User-Agent (http only).
+	UserAgent string
 }
 
 // GetSetting returns the value for key, or ok=false if absent. Values are
@@ -57,7 +64,7 @@ ON CONFLICT(key) DO UPDATE SET
 // ListCheckConfigs returns all configured checks ordered by id.
 func (db *DB) ListCheckConfigs() ([]CheckConfig, error) {
 	const q = `
-SELECT id, name, type, interval_sec, timeout_sec, url, method, host, port, process, command, enabled
+SELECT id, name, type, interval_sec, timeout_sec, url, method, host, port, process, command, enabled, accept_any, accepted_statuses, user_agent
 FROM check_config
 ORDER BY id ASC;`
 	rows, err := db.conn.Query(q)
@@ -86,8 +93,8 @@ func (db *DB) CountCheckConfigs() (int, error) {
 // CreateCheckConfig inserts a check and returns it with its new ID.
 func (db *DB) CreateCheckConfig(c CheckConfig) (CheckConfig, error) {
 	const q = `
-INSERT INTO check_config (name, type, interval_sec, timeout_sec, url, method, host, port, process, command, enabled)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+INSERT INTO check_config (name, type, interval_sec, timeout_sec, url, method, host, port, process, command, enabled, accept_any, accepted_statuses, user_agent)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 	res, err := db.conn.Exec(
 		q,
 		c.Name,
@@ -101,6 +108,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 		c.Process,
 		c.Command,
 		boolToInt(c.Enabled),
+		boolToInt(c.AcceptAny),
+		c.AcceptedStatuses,
+		c.UserAgent,
 	)
 	if err != nil {
 		return CheckConfig{}, fmt.Errorf("storage: create check config %q: %w", c.Name, err)
@@ -130,7 +140,10 @@ UPDATE check_config SET
     port         = ?,
     process      = ?,
     command      = ?,
-    enabled      = ?
+    enabled      = ?,
+    accept_any        = ?,
+    accepted_statuses = ?,
+    user_agent        = ?
 WHERE id = ?;`
 	res, err := db.conn.Exec(
 		q,
@@ -145,6 +158,9 @@ WHERE id = ?;`
 		c.Process,
 		c.Command,
 		boolToInt(c.Enabled),
+		boolToInt(c.AcceptAny),
+		c.AcceptedStatuses,
+		c.UserAgent,
 		c.ID,
 	)
 	if err != nil {
@@ -177,16 +193,19 @@ func scanCheckConfigs(rows *sql.Rows) ([]CheckConfig, error) {
 	var out []CheckConfig
 	for rows.Next() {
 		var (
-			c       CheckConfig
-			enabled int64
+			c         CheckConfig
+			enabled   int64
+			acceptAny int64
 		)
 		if err := rows.Scan(
 			&c.ID, &c.Name, &c.Type, &c.IntervalSec, &c.TimeoutSec,
 			&c.URL, &c.Method, &c.Host, &c.Port, &c.Process, &c.Command, &enabled,
+			&acceptAny, &c.AcceptedStatuses, &c.UserAgent,
 		); err != nil {
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
 		c.Enabled = enabled != 0
+		c.AcceptAny = acceptAny != 0
 		out = append(out, c)
 	}
 	if err := rows.Err(); err != nil {

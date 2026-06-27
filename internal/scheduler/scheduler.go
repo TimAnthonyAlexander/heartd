@@ -115,5 +115,9 @@ func toConfigCheck(c settings.Check) config.Check {
 		PortNum:  c.Port,
 		Process:  c.Process,
 		Command:  c.Command,
+
+		AcceptAny:        c.AcceptAny,
+		AcceptedStatuses: c.AcceptedStatuses,
+		UserAgent:        c.UserAgent,
 	}
 }

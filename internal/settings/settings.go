@@ -96,6 +96,14 @@ type Check struct {
 	Process  string        `json:"process"`
 	Command  string        `json:"command"`
 	Enabled  bool          `json:"enabled"`
+	// AcceptAny (http only): treat any HTTP response as healthy. Takes
+	// precedence over AcceptedStatuses.
+	AcceptAny bool `json:"accept_any"`
+	// AcceptedStatuses (http only): explicit list of healthy status codes.
+	// Empty means the 2xx default.
+	AcceptedStatuses []int `json:"accepted_statuses"`
+	// UserAgent (http only): override the default health-check User-Agent.
+	UserAgent string `json:"user_agent"`
 }
 
 // Service is the cached, thread-safe settings store.
@@ -214,6 +222,9 @@ func (s *Service) seed(cfg config.Config) error {
 			TimeoutSec:  int64(c.Timeout.Std().Seconds()),
 			URL:         c.URL, Method: c.Method, Host: c.Host, Port: c.PortNum,
 			Process: c.Process, Command: c.Command, Enabled: true,
+			AcceptAny:        c.AcceptAny,
+			AcceptedStatuses: formatStatusCodes(c.AcceptedStatuses),
+			UserAgent:        c.UserAgent,
 		}
 		if _, err := s.db.CreateCheckConfig(cc); err != nil {
 			return err
@@ -481,6 +492,9 @@ func fromStorage(r storage.CheckConfig) Check {
 		Timeout:  time.Duration(r.TimeoutSec) * time.Second,
 		URL:      r.URL, Method: r.Method, Host: r.Host, Port: r.Port,
 		Process: r.Process, Command: r.Command, Enabled: r.Enabled,
+		AcceptAny:        r.AcceptAny,
+		AcceptedStatuses: parseStatusCodes(r.AcceptedStatuses),
+		UserAgent:        r.UserAgent,
 	}
 }
 
@@ -491,5 +505,8 @@ func toStorage(c Check) storage.CheckConfig {
 		TimeoutSec:  int64(c.Timeout.Seconds()),
 		URL:         c.URL, Method: c.Method, Host: c.Host, Port: c.Port,
 		Process: c.Process, Command: c.Command, Enabled: c.Enabled,
+		AcceptAny:        c.AcceptAny,
+		AcceptedStatuses: formatStatusCodes(c.AcceptedStatuses),
+		UserAgent:        c.UserAgent,
 	}
 }

@@ -2,6 +2,11 @@ BINARY := heartd
 PKG := ./cmd/heartd
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
+# Build version injected into the binary (used e.g. for the health-check
+# User-Agent). Falls back to the package default ("dev") when git is absent.
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X github.com/timanthonyalexander/heartd/internal/version.Version=$(VERSION)
+
 .PHONY: all build frontend backend dev test clean cross
 
 # Full release build: frontend bundle embedded into the Go binary.
@@ -11,7 +16,7 @@ frontend:
 	cd frontend && bun install && bun run build
 
 backend:
-	go build -o $(BINARY) $(PKG)
+	go build -ldflags "$(LDFLAGS)" -o $(BINARY) $(PKG)
 
 build: frontend backend
 
@@ -42,5 +47,5 @@ cross: frontend
 		os=$${p%/*}; arch=$${p#*/}; \
 		echo "building $$os/$$arch"; \
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
-			go build -o bin/$(BINARY)-$$os-$$arch $(PKG); \
+			go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY)-$$os-$$arch $(PKG); \
 	done

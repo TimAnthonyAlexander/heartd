@@ -135,6 +135,12 @@ type Check struct {
 	PortNum int    `yaml:"port"`    // tcp
 	Process string `yaml:"process"` // process
 	Command string `yaml:"command"` // shell
+	// AcceptAny (http): treat any HTTP response as healthy; overrides AcceptedStatuses.
+	AcceptAny bool `yaml:"accept_any"`
+	// AcceptedStatuses (http): explicit healthy status codes; empty means 2xx default.
+	AcceptedStatuses []int `yaml:"accepted_statuses"`
+	// UserAgent (http): override the default health-check User-Agent.
+	UserAgent string `yaml:"user_agent"`
 }
 
 // Thresholds defines system-metric alert thresholds (percentages).

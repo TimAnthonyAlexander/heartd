@@ -218,7 +218,10 @@ CREATE TABLE IF NOT EXISTS check_config (
     port         INTEGER NOT NULL DEFAULT 0,
     process      TEXT NOT NULL DEFAULT '',
     command      TEXT NOT NULL DEFAULT '',
-    enabled      INTEGER NOT NULL DEFAULT 1
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    accept_any        INTEGER NOT NULL DEFAULT 0,
+    accepted_statuses TEXT NOT NULL DEFAULT '',
+    user_agent        TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS alert_rule (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -301,6 +304,9 @@ func ensureColumns(conn *sql.DB) error {
 		{"metric_sample", "swap_percent", "REAL NOT NULL DEFAULT 0"},
 		{"node_alias", "advertised_alias", "TEXT NOT NULL DEFAULT ''"},
 		{"alert_event", "observer", "TEXT NOT NULL DEFAULT ''"},
+		{"check_config", "accept_any", "INTEGER NOT NULL DEFAULT 0"},
+		{"check_config", "accepted_statuses", "TEXT NOT NULL DEFAULT ''"},
+		{"check_config", "user_agent", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, m := range migrations {
 		has, err := hasColumn(conn, m.table, m.name)

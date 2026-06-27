@@ -599,6 +599,12 @@ export interface CheckConfig {
   process: string
   command: string
   enabled: boolean
+  // http only: treat any HTTP response as healthy (overrides accepted_statuses).
+  accept_any: boolean
+  // http only: explicit healthy status codes; empty means the 2xx default.
+  accepted_statuses: number[]
+  // http only: override the default health-check User-Agent.
+  user_agent: string
 }
 
 export interface AllSettings {

@@ -142,6 +142,62 @@ func TestCreateCheckValidation(t *testing.T) {
 	}
 }
 
+func TestCheckAcceptedStatusesRoundTrip(t *testing.T) {
+	s := newService(t)
+	if err := s.Load(config.Default()); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	// Codes are normalized (deduped + sorted) on create and survive the
+	// comma-joined storage encoding.
+	created, err := s.CreateCheck(Check{
+		Name: "Login", Type: "http", URL: "https://app.example.com",
+		Interval: 30 * time.Second, Enabled: true,
+		AcceptedStatuses: []int{403, 200, 401, 200},
+		UserAgent:        "  my-agent  ",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got := created.AcceptedStatuses; len(got) != 3 || got[0] != 200 || got[1] != 401 || got[2] != 403 {
+		t.Errorf("accepted_statuses = %v, want [200 401 403]", got)
+	}
+	if created.UserAgent != "my-agent" {
+		t.Errorf("user_agent = %q, want trimmed %q", created.UserAgent, "my-agent")
+	}
+
+	// Reloading from the DB yields the same parsed list.
+	if err := s.Load(config.Default()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	var found *Check
+	for _, c := range s.Checks() {
+		if c.ID == created.ID {
+			cc := c
+			found = &cc
+		}
+	}
+	if found == nil {
+		t.Fatalf("check %d missing after reload", created.ID)
+	}
+	if got := found.AcceptedStatuses; len(got) != 3 || got[0] != 200 || got[2] != 403 {
+		t.Errorf("accepted_statuses after reload = %v, want [200 401 403]", got)
+	}
+}
+
+func TestCheckAcceptedStatusesValidation(t *testing.T) {
+	s := newService(t)
+	if err := s.Load(config.Default()); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, err := s.CreateCheck(Check{
+		Name: "bad", Type: "http", URL: "https://x.example.com",
+		Interval: time.Second, AcceptedStatuses: []int{99},
+	}); err == nil {
+		t.Error("expected validation error for out-of-range status code 99")
+	}
+}
+
 func TestNotifyRoundTrip(t *testing.T) {
 	s := newService(t)
 	if err := s.Load(config.Default()); err != nil {

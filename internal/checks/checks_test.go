@@ -58,8 +58,121 @@ func TestRunHTTPFailing(t *testing.T) {
 	if res.Status != StatusFailing {
 		t.Fatalf("status = %q, want %q", res.Status, StatusFailing)
 	}
-	if res.Detail != "HTTP 500" {
-		t.Errorf("detail = %q, want %q", res.Detail, "HTTP 500")
+	if res.Detail != "HTTP 500 (expected 2xx)" {
+		t.Errorf("detail = %q, want %q", res.Detail, "HTTP 500 (expected 2xx)")
+	}
+}
+
+func TestRunHTTPAcceptAny(t *testing.T) {
+	for _, code := range []int{200, 301, 401, 403, 500} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(code)
+		}))
+
+		res := Run(context.Background(), config.Check{
+			Type:      config.CheckHTTP,
+			URL:       srv.URL,
+			AcceptAny: true,
+			Timeout:   sec(2 * time.Second),
+		})
+		srv.Close()
+
+		if res.Status != StatusOK {
+			t.Errorf("code %d: status = %q, want %q (detail %q)", code, res.Status, StatusOK, res.Detail)
+		}
+		want := "HTTP " + strconv.Itoa(code)
+		if res.Detail != want {
+			t.Errorf("code %d: detail = %q, want %q", code, res.Detail, want)
+		}
+	}
+}
+
+func TestRunHTTPAcceptedStatuses(t *testing.T) {
+	accepted := []int{200, 401, 403}
+
+	// In-list code passes with a plain detail.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	res := Run(context.Background(), config.Check{
+		Type:             config.CheckHTTP,
+		URL:              srv.URL,
+		AcceptedStatuses: accepted,
+		Timeout:          sec(2 * time.Second),
+	})
+	srv.Close()
+	if res.Status != StatusOK {
+		t.Errorf("401 in list: status = %q, want %q (detail %q)", res.Status, StatusOK, res.Detail)
+	}
+	if res.Detail != "HTTP 401" {
+		t.Errorf("401 in list: detail = %q, want %q", res.Detail, "HTTP 401")
+	}
+
+	// Out-of-list code fails and the detail names the expectation.
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	res = Run(context.Background(), config.Check{
+		Type:             config.CheckHTTP,
+		URL:              srv.URL,
+		AcceptedStatuses: accepted,
+		Timeout:          sec(2 * time.Second),
+	})
+	srv.Close()
+	if res.Status != StatusFailing {
+		t.Errorf("500 out of list: status = %q, want %q", res.Status, StatusFailing)
+	}
+	if res.Detail != "HTTP 500 (expected one of 200, 401, 403)" {
+		t.Errorf("500 out of list: detail = %q, want %q", res.Detail, "HTTP 500 (expected one of 200, 401, 403)")
+	}
+}
+
+func TestRunHTTPDefaultFailureDetail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	res := Run(context.Background(), config.Check{
+		Type:    config.CheckHTTP,
+		URL:     srv.URL,
+		Timeout: sec(2 * time.Second),
+	})
+	if res.Status != StatusFailing {
+		t.Fatalf("status = %q, want %q", res.Status, StatusFailing)
+	}
+	if res.Detail != "HTTP 503 (expected 2xx)" {
+		t.Errorf("detail = %q, want %q", res.Detail, "HTTP 503 (expected 2xx)")
+	}
+}
+
+func TestRunHTTPUserAgent(t *testing.T) {
+	var gotUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// Default UA identifies heartd.
+	Run(context.Background(), config.Check{
+		Type:    config.CheckHTTP,
+		URL:     srv.URL,
+		Timeout: sec(2 * time.Second),
+	})
+	if !strings.HasPrefix(gotUA, "heartd/") || !strings.Contains(gotUA, "health-check") {
+		t.Errorf("default User-Agent = %q, want heartd/<version> (health-check)", gotUA)
+	}
+
+	// Per-check override wins.
+	Run(context.Background(), config.Check{
+		Type:      config.CheckHTTP,
+		URL:       srv.URL,
+		UserAgent: "custom-agent/1.0",
+		Timeout:   sec(2 * time.Second),
+	})
+	if gotUA != "custom-agent/1.0" {
+		t.Errorf("override User-Agent = %q, want %q", gotUA, "custom-agent/1.0")
 	}
 }
 

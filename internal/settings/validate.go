@@ -161,6 +161,8 @@ func normalizeCheck(c Check) Check {
 	if c.Type == CheckHTTP && c.Method == "" {
 		c.Method = "GET"
 	}
+	c.UserAgent = strings.TrimSpace(c.UserAgent)
+	c.AcceptedStatuses = dedupeSortStatusCodes(c.AcceptedStatuses)
 	return c
 }
 
@@ -175,6 +177,11 @@ func validateCheck(c Check) error {
 	case CheckHTTP:
 		if c.URL == "" {
 			return fmt.Errorf("http check requires a url")
+		}
+		for _, code := range c.AcceptedStatuses {
+			if code < 100 || code > 599 {
+				return fmt.Errorf("accepted status code %d is out of range (must be 100-599)", code)
+			}
 		}
 	case CheckTCP:
 		if c.Host == "" {

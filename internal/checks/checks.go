@@ -13,11 +13,13 @@ import (
 	"net"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/process"
 	"github.com/timanthonyalexander/heartd/internal/config"
+	"github.com/timanthonyalexander/heartd/internal/version"
 )
 
 // Status is the outcome of a check.
@@ -87,6 +89,7 @@ func runHTTP(ctx context.Context, c config.Check) Result {
 	if err != nil {
 		return Result{Status: StatusFailing, Detail: fmt.Sprintf("invalid request: %v", err)}
 	}
+	req.Header.Set("User-Agent", httpUserAgent(c.UserAgent))
 
 	client := &http.Client{Timeout: c.Timeout.Std()}
 
@@ -98,15 +101,55 @@ func runHTTP(ctx context.Context, c config.Check) Result {
 	}
 	defer resp.Body.Close()
 
+	ok, expected := httpStatusAccepted(resp.StatusCode, c.AcceptAny, c.AcceptedStatuses)
 	status := StatusFailing
-	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+	detail := fmt.Sprintf("HTTP %d", resp.StatusCode)
+	if ok {
 		status = StatusOK
+	} else {
+		detail = fmt.Sprintf("HTTP %d (expected %s)", resp.StatusCode, expected)
 	}
 	return Result{
 		Status:    status,
-		Detail:    fmt.Sprintf("HTTP %d", resp.StatusCode),
+		Detail:    detail,
 		LatencyMS: latency.Milliseconds(),
 	}
+}
+
+// httpUserAgent returns the per-check override when set, else the default
+// recognizable heartd health-check User-Agent so far ends can allow-list us.
+func httpUserAgent(override string) string {
+	if override != "" {
+		return override
+	}
+	return "heartd/" + version.Version + " (health-check)"
+}
+
+// httpStatusAccepted decides whether code counts as healthy and, when not,
+// returns a human-readable description of what was expected (for the failure
+// detail). Precedence: acceptAny > explicit list > 2xx default.
+func httpStatusAccepted(code int, acceptAny bool, accepted []int) (ok bool, expected string) {
+	if acceptAny {
+		return true, "any response"
+	}
+	if len(accepted) > 0 {
+		for _, c := range accepted {
+			if c == code {
+				return true, ""
+			}
+		}
+		return false, "one of " + joinCodes(accepted)
+	}
+	return code >= 200 && code <= 299, "2xx"
+}
+
+// joinCodes renders a status-code list as "200, 401, 403".
+func joinCodes(codes []int) string {
+	parts := make([]string, len(codes))
+	for i, c := range codes {
+		parts[i] = strconv.Itoa(c)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // runTCP attempts a TCP connection to host:port.

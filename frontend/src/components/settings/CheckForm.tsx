@@ -34,7 +34,23 @@ function emptyCheck(): CheckConfig {
     process: '',
     command: '',
     enabled: true,
+    accept_any: false,
+    accepted_statuses: [],
+    user_agent: '',
   }
+}
+
+// parseStatusCodes turns free-form input like "200, 401 403" into a deduped,
+// ordered list of codes. Non-numeric fragments are dropped so partial typing
+// never throws.
+function parseStatusCodes(raw: string): number[] {
+  const seen = new Set<number>()
+  for (const part of raw.split(/[,\s]+/)) {
+    if (!part) continue
+    const n = Number(part)
+    if (Number.isInteger(n)) seen.add(n)
+  }
+  return [...seen].sort((a, b) => a - b)
 }
 
 interface Props {
@@ -48,6 +64,8 @@ interface Props {
 
 export function CheckForm({ open, initial, onSubmit, onClose }: Props) {
   const [check, setCheck] = useState<CheckConfig>(initial ?? emptyCheck())
+  // Raw text mirror of accepted_statuses so partial typing ("200, ") survives.
+  const [statusText, setStatusText] = useState(() => (initial?.accepted_statuses ?? []).join(', '))
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -59,11 +77,15 @@ export function CheckForm({ open, initial, onSubmit, onClose }: Props) {
   // Seed the form from a template. The template name is only applied when the
   // name field is still empty, so it never clobbers something you've typed.
   const applyTemplate = (t: CheckTemplate) =>
-    setCheck((prev) => ({
-      ...prev,
-      ...t.values,
-      name: prev.name.trim() ? prev.name : t.values.name ?? prev.name,
-    }))
+    setCheck((prev) => {
+      const next = {
+        ...prev,
+        ...t.values,
+        name: prev.name.trim() ? prev.name : t.values.name ?? prev.name,
+      }
+      if (t.values.accepted_statuses) setStatusText(next.accepted_statuses.join(', '))
+      return next
+    })
 
   const submit = async () => {
     if (!check.name.trim()) {
@@ -131,24 +153,60 @@ export function CheckForm({ open, initial, onSubmit, onClose }: Props) {
           </Box>
 
           {check.type === 'http' && (
-            <Box sx={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 2 }}>
+            <>
+              <Box sx={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 2 }}>
+                <TextField
+                  label="URL"
+                  size="small"
+                  value={check.url}
+                  onChange={(e) => set('url')(e.target.value)}
+                  placeholder="https://example.com/health"
+                  fullWidth
+                />
+                <TextField
+                  label="Method"
+                  size="small"
+                  value={check.method}
+                  onChange={(e) => set('method')(e.target.value)}
+                  placeholder="GET"
+                  fullWidth
+                />
+              </Box>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={check.accept_any}
+                    onChange={(e) => set('accept_any')(e.target.checked)}
+                  />
+                }
+                label="Accept any HTTP response as healthy"
+              />
               <TextField
-                label="URL"
+                label="Accepted status codes"
                 size="small"
-                value={check.url}
-                onChange={(e) => set('url')(e.target.value)}
-                placeholder="https://example.com/health"
+                value={statusText}
+                onChange={(e) => {
+                  setStatusText(e.target.value)
+                  set('accepted_statuses')(parseStatusCodes(e.target.value))
+                }}
+                placeholder="200, 401, 403"
+                helperText={
+                  check.accept_any
+                    ? 'Ignored while “Accept any HTTP response” is on.'
+                    : 'Comma-separated. Leave blank for the default (2xx only).'
+                }
+                disabled={check.accept_any}
                 fullWidth
               />
               <TextField
-                label="Method"
+                label="User-Agent (optional)"
                 size="small"
-                value={check.method}
-                onChange={(e) => set('method')(e.target.value)}
-                placeholder="GET"
+                value={check.user_agent}
+                onChange={(e) => set('user_agent')(e.target.value)}
+                placeholder="heartd/<version> (health-check)"
                 fullWidth
               />
-            </Box>
+            </>
           )}
 
           {check.type === 'tcp' && (
