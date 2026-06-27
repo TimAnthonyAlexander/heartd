@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -74,6 +75,15 @@ func smartFilePath() string {
 	return "/var/lib/diskhealth/smart.json"
 }
 
+// smartStatusFilePath returns the legacy compact "status" file used as a fallback
+// when no JSON file exists. Overridable for tests via HEARTD_SMART_STATUS_FILE.
+func smartStatusFilePath() string {
+	if p := os.Getenv("HEARTD_SMART_STATUS_FILE"); p != "" {
+		return p
+	}
+	return "/var/lib/diskhealth/smart.status"
+}
+
 // ReadSmart reads the external SMART JSON file. A missing file yields
 // Present=false with no error (SMART simply isn't collected here). A malformed
 // file is logged once and also yields Present=false rather than failing the
@@ -83,7 +93,10 @@ func ReadSmart() (SmartReport, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return SmartReport{Present: false}, nil
+			// No JSON file — fall back to the legacy compact ".status" line
+			// format written by a simple hand-rolled smartctl collector, so an
+			// existing custom setup lights up the panel without re-tooling.
+			return readSmartStatus(smartStatusFilePath()), nil
 		}
 		return SmartReport{}, fmt.Errorf("metrics: read smart file: %w", err)
 	}
@@ -118,6 +131,97 @@ func ReadSmart() (SmartReport, error) {
 		SourceAt: smartSourceAt(path, raw.GeneratedAt),
 		Present:  true,
 	}, nil
+}
+
+// readSmartStatus parses the compact one-line SMART status format written by a
+// simple shell collector, e.g.:
+//
+//	OK 2026-06-27T19:54:02+02:00 sda=PASSED,re=0,pend=0,unc=0 sdb=PASSED,re=0,pend=0,unc=0
+//
+// The leading token is an overall OK/FAIL summary (ignored — heartd derives its
+// own per-disk rollup), the second is an RFC3339 timestamp, and each remaining
+// "dev=HEALTH,re=N,pend=N,unc=N" token is one disk. A trailing "!flag" token that
+// some collectors append to annotate a disk is skipped. This format carries less
+// than the JSON schema (no model/serial/temperature/power-on hours), so those
+// stay zero. A missing, empty, or unparsable file yields Present=false (no
+// error), exactly like the JSON path — SMART is an optional, independent source.
+func readSmartStatus(path string) SmartReport {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return SmartReport{Present: false}
+	}
+
+	line := ""
+	for _, l := range strings.Split(string(data), "\n") {
+		if s := strings.TrimSpace(l); s != "" {
+			line = s
+			break
+		}
+	}
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		return SmartReport{Present: false}
+	}
+
+	sourceAt := time.Now().UTC()
+	if t, err := time.Parse(time.RFC3339, fields[1]); err == nil {
+		sourceAt = t.UTC()
+	} else if fi, err := os.Stat(path); err == nil {
+		sourceAt = fi.ModTime().UTC()
+	}
+
+	var disks []SmartDisk
+	for _, tok := range fields[2:] {
+		if !strings.Contains(tok, "=") {
+			continue // a "!flag" annotation (or noise) — skip
+		}
+		device, rest, _ := strings.Cut(tok, "=")
+		parts := strings.Split(rest, ",")
+		d := SmartDisk{Device: normalizeSmartDevice(device)}
+		// First comma-part is the overall health word; the rest are key=value counters.
+		d.Health = parts[0]
+		for _, kv := range parts[1:] {
+			k, v, ok := strings.Cut(kv, "=")
+			if !ok {
+				continue
+			}
+			switch k {
+			case "re":
+				d.Reallocated = parseUintSafe(v)
+			case "pend":
+				d.Pending = parseUintSafe(v)
+			case "unc":
+				d.Uncorrectable = parseUintSafe(v)
+			case "crc":
+				d.CRCErrors = parseUintSafe(v)
+			}
+		}
+		disks = append(disks, d)
+	}
+	if len(disks) == 0 {
+		return SmartReport{Present: false}
+	}
+	return SmartReport{Disks: disks, SourceAt: sourceAt, Present: true}
+}
+
+// normalizeSmartDevice prefixes a bare device name (e.g. "sda") with /dev/ so the
+// status path matches the JSON path's "/dev/sda" convention; an absolute path is
+// left as-is.
+func normalizeSmartDevice(name string) string {
+	if name == "" || strings.HasPrefix(name, "/") {
+		return name
+	}
+	return "/dev/" + name
+}
+
+// parseUintSafe parses a base-10 unsigned integer, returning 0 on any error so a
+// malformed counter never aborts the whole line.
+func parseUintSafe(s string) uint64 {
+	n, err := strconv.ParseUint(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // smartSourceAt resolves the report timestamp: the JSON generated_at when it
