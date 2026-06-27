@@ -126,6 +126,13 @@ CREATE TABLE IF NOT EXISTS process_top (
     at          INTEGER NOT NULL,
     PRIMARY KEY (node, pid)
 );
+CREATE TABLE IF NOT EXISTS cpu_core (
+    node    TEXT NOT NULL,
+    core    INTEGER NOT NULL,
+    percent REAL NOT NULL,
+    at      INTEGER NOT NULL,
+    PRIMARY KEY (node, core)
+);
 CREATE TABLE IF NOT EXISTS node_alias (
     node             TEXT PRIMARY KEY,
     alias            TEXT NOT NULL,

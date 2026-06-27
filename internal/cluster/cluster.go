@@ -104,6 +104,13 @@ type peerProcess struct {
 	At         string  `json:"at"`
 }
 
+// peerCore mirrors one element of /api/peer/cpu/cores.
+type peerCore struct {
+	Core    int     `json:"core"`
+	Percent float64 `json:"percent"`
+	At      string  `json:"at"`
+}
+
 // Poller announces this node to peers and polls them on an interval. The peer
 // list is read fresh from storage each cycle, so peers added or removed in the
 // dashboard take effect without a restart.
@@ -314,6 +321,7 @@ func (p *Poller) pollPeer(ctx context.Context, peer storage.Peer) {
 	p.storePeerDisk(ctx, peer)
 	p.storePeerNet(ctx, peer)
 	p.storePeerCPUState(ctx, peer)
+	p.storePeerCPUCores(ctx, peer)
 	p.storePeerDiskIO(ctx, peer)
 	p.storePeerProcesses(ctx, peer)
 	p.storePeerIdentity(ctx, peer)
@@ -380,6 +388,30 @@ func (p *Poller) storePeerCPUState(ctx context.Context, peer storage.Peer) {
 		Node: peer.Name, User: c.User, System: c.System, Nice: c.Nice,
 		Iowait: c.Iowait, Irq: c.Irq, Steal: c.Steal, Idle: c.Idle, At: at,
 	})
+}
+
+// storePeerCPUCores fetches a peer's latest per-core busy snapshot and records it
+// under the peer's name, replacing the previous set. Best-effort: a failure does
+// not affect the rest of the poll.
+func (p *Poller) storePeerCPUCores(ctx context.Context, peer storage.Peer) {
+	var cores []peerCore
+	if err := p.getJSON(ctx, peer, "/api/peer/cpu/cores", &cores); err != nil {
+		return
+	}
+	samples := make([]storage.CoreSample, 0, len(cores))
+	for _, c := range cores {
+		at, perr := time.Parse(time.RFC3339, c.At)
+		if perr != nil {
+			at = time.Now().UTC()
+		}
+		samples = append(samples, storage.CoreSample{
+			Node:    peer.Name,
+			Core:    c.Core,
+			Percent: c.Percent,
+			At:      at,
+		})
+	}
+	_ = p.db.ReplacePerCore(peer.Name, samples)
 }
 
 // storePeerDiskIO fetches a peer's latest per-device disk I/O snapshot and

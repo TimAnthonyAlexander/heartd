@@ -5,6 +5,7 @@ import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { MetricPanel } from './components/MetricPanel'
 import { CPUBreakdownPanel } from './components/CPUBreakdownPanel'
+import { PerCorePanel } from './components/PerCorePanel'
 import { DiskPanel } from './components/DiskPanel'
 import { NetworkPanel } from './components/NetworkPanel'
 import { DiskIOPanel } from './components/DiskIOPanel'
@@ -192,6 +193,7 @@ export default function App({ username, onLogout }: AppProps) {
                       series={data.cpuStateSeries}
                       dimmed={data.unreachable}
                     />
+                    <PerCorePanel cores={data.cores} dimmed={data.unreachable} />
                     <MetricPanel
                       title="Memory"
                       headline={`${formatGB(m.mem_used)} / ${formatGB(m.mem_total)} GB`}

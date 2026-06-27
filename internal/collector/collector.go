@@ -40,6 +40,11 @@ type Collector struct {
 	prevCPUTimes   metrics.CPUTimes
 	prevCPUTimesAt time.Time
 
+	// Previous per-core cumulative CPU times, for deriving each core's busy
+	// percentage between samples. Zero prevPerCoreAt means no prior reading.
+	prevPerCore   []metrics.CoreTime
+	prevPerCoreAt time.Time
+
 	// Previous per-device disk I/O counters, for deriving throughput/IOPS rates.
 	prevDiskIO   map[string]metrics.DiskIOCounters
 	prevDiskIOAt time.Time
@@ -109,6 +114,7 @@ func (c *Collector) sampleOnce(ctx context.Context) {
 	c.sampleDisks(ctx, at)
 	c.sampleNet(ctx, at)
 	c.sampleCPUState(ctx, at)
+	c.sampleCPUCores(ctx, at)
 	c.sampleDiskIO(ctx, at)
 	c.sampleProcesses(ctx, at)
 }
@@ -232,6 +238,61 @@ func (c *Collector) sampleCPUState(ctx context.Context, at time.Time) {
 		At:     at,
 	}); err != nil {
 		log.Printf("collector: cpu state persist failed: %v", err)
+	}
+}
+
+// sampleCPUCores reads cumulative per-core CPU times and stores each core's busy
+// percentage derived from the previous reading (delta(busy)/delta(total)*100), as
+// a replace-on-write snapshot. The first cycle (no previous reading) and any cycle
+// where the core count changed prime the baseline and store NOTHING this cycle —
+// the same skip-first approach as sampleCPUState — so the panel shows "collecting…"
+// until a real delta exists. Counter resets (delta(total) <= 0 or a negative busy
+// delta) yield 0 for that core rather than a spurious spike. Each percentage is
+// clamped to [0,100].
+func (c *Collector) sampleCPUCores(ctx context.Context, at time.Time) {
+	cur, err := metrics.ReadPerCoreTimes(ctx)
+	if err != nil {
+		log.Printf("collector: cpu core sample failed: %v", err)
+		return
+	}
+
+	prev := c.prevPerCore
+	prevAt := c.prevPerCoreAt
+	c.prevPerCore = cur
+	c.prevPerCoreAt = at
+
+	// First cycle, or the core count changed: prime the baseline and skip the
+	// write so the panel doesn't show a misleading point.
+	if prevAt.IsZero() || len(prev) != len(cur) {
+		return
+	}
+	if at.Sub(prevAt).Seconds() <= 0 {
+		return // no elapsed wall-time; skip this sample
+	}
+
+	samples := make([]storage.CoreSample, 0, len(cur))
+	for i, core := range cur {
+		var pct float64
+		totalDelta := core.Total - prev[i].Total
+		if busyDelta := core.Busy - prev[i].Busy; totalDelta > 0 && busyDelta > 0 {
+			pct = round2(busyDelta / totalDelta * 100)
+		}
+		if pct < 0 {
+			pct = 0
+		}
+		if pct > 100 {
+			pct = 100
+		}
+		samples = append(samples, storage.CoreSample{
+			Node:    c.node,
+			Core:    i,
+			Percent: pct,
+			At:      at,
+		})
+	}
+
+	if err := c.db.ReplacePerCore(c.node, samples); err != nil {
+		log.Printf("collector: cpu core persist failed: %v", err)
 	}
 }
 

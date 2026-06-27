@@ -354,6 +354,18 @@ export function fetchProcesses(nodeName: string, signal?: AbortSignal): Promise<
   return getJSON<ProcessInfo[]>(`/api/nodes/${encodeURIComponent(nodeName)}/processes`, signal)
 }
 
+// One logical core's current busy percentage. core is the zero-based core index;
+// percent is that core's busy share (0-100) over the last sampling interval.
+export interface CoreInfo {
+  core: number
+  percent: number
+  at: string
+}
+
+export function fetchCPUCores(nodeName: string, signal?: AbortSignal): Promise<CoreInfo[]> {
+  return getJSON<CoreInfo[]>(`/api/nodes/${encodeURIComponent(nodeName)}/cpu/cores`, signal)
+}
+
 export function fetchDiskIOHistory(
   nodeName: string,
   fromSec: number,

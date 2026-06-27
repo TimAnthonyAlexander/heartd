@@ -80,6 +80,7 @@ func New(cfg Config) http.Handler {
 	mux.Handle("GET /api/peer/disk", s.requireSecret(http.HandlerFunc(s.handlePeerDisk)))
 	mux.Handle("GET /api/peer/network", s.requireSecret(http.HandlerFunc(s.handlePeerNetwork)))
 	mux.Handle("GET /api/peer/cpu", s.requireSecret(http.HandlerFunc(s.handlePeerCPUState)))
+	mux.Handle("GET /api/peer/cpu/cores", s.requireSecret(http.HandlerFunc(s.handlePeerCPUCores)))
 	mux.Handle("GET /api/peer/diskio", s.requireSecret(http.HandlerFunc(s.handlePeerDiskIO)))
 	mux.Handle("GET /api/peer/processes", s.requireSecret(http.HandlerFunc(s.handlePeerProcesses)))
 
@@ -155,6 +156,7 @@ func (s *server) registerDashboardRoutes(mux *http.ServeMux) {
 	protect("GET /api/nodes/{name}/metrics/history", s.handleHistory)
 	protect("GET /api/nodes/{name}/cpu", s.handleCPUState)
 	protect("GET /api/nodes/{name}/cpu/history", s.handleCPUStateHistory)
+	protect("GET /api/nodes/{name}/cpu/cores", s.handleCPUCores)
 	protect("GET /api/nodes/{name}/checks", s.handleChecks)
 	protect("GET /api/nodes/{name}/disk", s.handleDisk)
 	protect("GET /api/nodes/{name}/network", s.handleNetwork)
@@ -927,6 +929,52 @@ func (s *server) handleProcesses(w http.ResponseWriter, r *http.Request) {
 // handlePeerProcesses returns this node's own top processes to a peer.
 func (s *server) handlePeerProcesses(w http.ResponseWriter, r *http.Request) {
 	out, err := s.processesForNode(s.cfg.NodeName)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// coreDTO is one logical core's current busy percentage, as charted in the
+// dashboard's "Per-Core CPU" grid. Core is the zero-based core index; Percent is
+// that core's busy share over the last sampling interval.
+type coreDTO struct {
+	Core    int     `json:"core"`
+	Percent float64 `json:"percent"`
+	At      string  `json:"at"`
+}
+
+// coresForNode builds the per-core DTOs for a node from its stored snapshot,
+// already ordered by core index ascending.
+func (s *server) coresForNode(name string) ([]coreDTO, error) {
+	rows, err := s.cfg.DB.PerCore(name)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]coreDTO, 0, len(rows))
+	for _, c := range rows {
+		out = append(out, coreDTO{
+			Core:    c.Core,
+			Percent: c.Percent,
+			At:      c.At.UTC().Format(time.RFC3339),
+		})
+	}
+	return out, nil
+}
+
+func (s *server) handleCPUCores(w http.ResponseWriter, r *http.Request) {
+	out, err := s.coresForNode(r.PathValue("name"))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handlePeerCPUCores returns this node's own per-core snapshot to a peer.
+func (s *server) handlePeerCPUCores(w http.ResponseWriter, r *http.Request) {
+	out, err := s.coresForNode(s.cfg.NodeName)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

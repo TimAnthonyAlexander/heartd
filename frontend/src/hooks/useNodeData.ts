@@ -6,12 +6,14 @@ import {
   fetchDisk,
   fetchDiskIO,
   fetchDiskIOHistory,
+  fetchCPUCores,
   fetchHistory,
   fetchMetrics,
   fetchNetwork,
   fetchNetworkHistory,
   fetchProcesses,
   type Check,
+  type CoreInfo,
   type CPUState,
   type DiskIODevice,
   type DiskMount,
@@ -93,6 +95,7 @@ export interface NodeData {
   diskio: DiskIOTotals | null
   diskioSeries: DiskIOPoint[]
   processes: ProcessInfo[]
+  cores: CoreInfo[]
   loading: boolean
   unreachable: boolean
   lastUpdated: number | null
@@ -110,6 +113,7 @@ const EMPTY: NodeData = {
   diskio: null,
   diskioSeries: [],
   processes: [],
+  cores: [],
   loading: true,
   unreachable: false,
   lastUpdated: null,
@@ -211,7 +215,7 @@ export function useNodeData(
 
     const tick = async () => {
       try {
-        const [m, cs, disk, net, cpuState, ioRows, procs] = await Promise.all([
+        const [m, cs, disk, net, cpuState, ioRows, procs, cores] = await Promise.all([
           fetchMetrics(node, controller.signal),
           fetchChecks(node, controller.signal),
           fetchDisk(node, controller.signal),
@@ -219,6 +223,7 @@ export function useNodeData(
           fetchCPUState(node, controller.signal),
           fetchDiskIO(node, controller.signal),
           fetchProcesses(node, controller.signal),
+          fetchCPUCores(node, controller.signal),
         ])
         if (!active) return
         const diskio = sumDiskIO(ioRows)
@@ -249,6 +254,7 @@ export function useNodeData(
               diskio,
               diskioSeries: d.diskioSeries,
               processes: procs,
+              cores,
               loading: false,
               unreachable: false,
               lastUpdated: Date.now(),
@@ -304,6 +310,7 @@ export function useNodeData(
             diskio,
             diskioSeries,
             processes: procs,
+            cores,
             loading: false,
             unreachable: false,
             lastUpdated: Date.now(),
