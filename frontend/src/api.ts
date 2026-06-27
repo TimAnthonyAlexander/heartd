@@ -296,6 +296,22 @@ export function fetchDiskIO(nodeName: string, signal?: AbortSignal): Promise<Dis
   return getJSON<DiskIODevice[]>(`/api/nodes/${encodeURIComponent(nodeName)}/diskio`, signal)
 }
 
+// One process's current CPU/memory usage. cpu_percent is a share of total
+// machine capacity; mem_percent a share of physical memory; mem_rss is bytes.
+export interface ProcessInfo {
+  pid: number
+  name: string
+  command: string
+  cpu_percent: number
+  mem_percent: number
+  mem_rss: number
+  at: string
+}
+
+export function fetchProcesses(nodeName: string, signal?: AbortSignal): Promise<ProcessInfo[]> {
+  return getJSON<ProcessInfo[]>(`/api/nodes/${encodeURIComponent(nodeName)}/processes`, signal)
+}
+
 export function fetchDiskIOHistory(
   nodeName: string,
   fromSec: number,

@@ -102,6 +102,17 @@ CREATE TABLE IF NOT EXISTS disk_io_sample (
 );
 CREATE INDEX IF NOT EXISTS idx_disk_io_sample_node_at ON disk_io_sample(node, at);
 CREATE INDEX IF NOT EXISTS idx_disk_io_sample_node_device_at ON disk_io_sample(node, device, at);
+CREATE TABLE IF NOT EXISTS process_top (
+    node        TEXT NOT NULL,
+    pid         INTEGER NOT NULL,
+    name        TEXT NOT NULL,
+    command     TEXT NOT NULL,
+    cpu_percent REAL NOT NULL,
+    mem_percent REAL NOT NULL,
+    mem_rss     INTEGER NOT NULL,
+    at          INTEGER NOT NULL,
+    PRIMARY KEY (node, pid)
+);
 CREATE TABLE IF NOT EXISTS node_alias (
     node             TEXT PRIMARY KEY,
     alias            TEXT NOT NULL,

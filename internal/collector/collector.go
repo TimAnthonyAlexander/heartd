@@ -5,12 +5,17 @@ package collector
 import (
 	"context"
 	"log"
+	"runtime"
+	"sort"
 	"time"
 
 	"github.com/timanthonyalexander/heartd/internal/metrics"
 	"github.com/timanthonyalexander/heartd/internal/settings"
 	"github.com/timanthonyalexander/heartd/internal/storage"
 )
+
+// topProcessCount is how many processes (by CPU share) are persisted each cycle.
+const topProcessCount = 10
 
 // cpuWindow is how long each CPU sample blocks to compute a usage percentage.
 const cpuWindow = 500 * time.Millisecond
@@ -33,6 +38,11 @@ type Collector struct {
 	// Previous per-device disk I/O counters, for deriving throughput/IOPS rates.
 	prevDiskIO   map[string]metrics.DiskIOCounters
 	prevDiskIOAt time.Time
+
+	// Previous per-process cumulative CPU time (pid -> seconds), for deriving each
+	// process's instantaneous CPU share between samples.
+	prevProcCPU map[int32]float64
+	prevProcAt  time.Time
 }
 
 // New builds a Collector for the local node.
@@ -94,6 +104,7 @@ func (c *Collector) sampleOnce(ctx context.Context) {
 	c.sampleDisks(ctx, at)
 	c.sampleNet(ctx, at)
 	c.sampleDiskIO(ctx, at)
+	c.sampleProcesses(ctx, at)
 }
 
 // sampleDisks records current usage per mount and returns the highest usage
@@ -205,6 +216,79 @@ func (c *Collector) sampleDiskIO(ctx context.Context, at time.Time) {
 	}
 	c.prevDiskIO = counters
 	c.prevDiskIOAt = at
+}
+
+// sampleProcesses reads every process's cumulative CPU time and derives each
+// one's instantaneous CPU share — its CPU-seconds gained since the previous
+// sample, divided by elapsed wall-time and the core count, so the values are a
+// share of the whole machine's capacity (and roughly sum toward the headline CPU
+// percent). New pids and counter resets yield 0, mirroring sampleNet/sampleDiskIO.
+// The top processes by CPU share are persisted, replacing the previous set. The
+// first cycle (no previous reading) yields 0% for every process; it fills in on
+// the next cycle, exactly like the rate-derived net/disk metrics.
+func (c *Collector) sampleProcesses(ctx context.Context, at time.Time) {
+	procs, err := metrics.ReadProcesses(ctx)
+	if err != nil {
+		log.Printf("collector: process sample failed: %v", err)
+		return
+	}
+
+	var secs float64
+	if !c.prevProcAt.IsZero() {
+		secs = at.Sub(c.prevProcAt).Seconds()
+	}
+	cores := float64(runtime.NumCPU())
+
+	curCPU := make(map[int32]float64, len(procs))
+	samples := make([]storage.ProcessSample, 0, len(procs))
+	for _, p := range procs {
+		curCPU[p.PID] = p.CPUTime
+
+		var cpuPct float64
+		if prev, hadPrev := c.prevProcCPU[p.PID]; hadPrev && secs > 0 && cores > 0 {
+			// Guard against a counter reset (pid reuse) yielding a negative spike.
+			if delta := p.CPUTime - prev; delta > 0 {
+				cpuPct = round2(delta / secs * 100 / cores)
+			}
+		}
+		samples = append(samples, storage.ProcessSample{
+			Node:       c.node,
+			PID:        p.PID,
+			Name:       p.Name,
+			Command:    p.Command,
+			CPUPercent: cpuPct,
+			MemPercent: round2(p.MemPercent),
+			MemRSS:     p.MemRSS,
+			At:         at,
+		})
+	}
+
+	// Top-N by CPU share; ties broken by memory share then pid for a stable order.
+	sort.SliceStable(samples, func(i, j int) bool {
+		a, b := samples[i], samples[j]
+		if a.CPUPercent != b.CPUPercent {
+			return a.CPUPercent > b.CPUPercent
+		}
+		if a.MemPercent != b.MemPercent {
+			return a.MemPercent > b.MemPercent
+		}
+		return a.PID < b.PID
+	})
+	if len(samples) > topProcessCount {
+		samples = samples[:topProcessCount]
+	}
+
+	if err := c.db.ReplaceProcessTop(c.node, samples); err != nil {
+		log.Printf("collector: process persist failed: %v", err)
+	}
+	c.prevProcCPU = curCPU
+	c.prevProcAt = at
+}
+
+// round2 rounds to two decimal places, matching the metrics package's rounding so
+// derived percentages don't carry float noise into storage.
+func round2(v float64) float64 {
+	return float64(int64(v*100+0.5)) / 100
 }
 
 // perSecond returns the per-second rate between two cumulative counter values.

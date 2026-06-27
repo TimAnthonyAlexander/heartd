@@ -80,6 +80,7 @@ func New(cfg Config) http.Handler {
 	mux.Handle("GET /api/peer/disk", s.requireSecret(http.HandlerFunc(s.handlePeerDisk)))
 	mux.Handle("GET /api/peer/network", s.requireSecret(http.HandlerFunc(s.handlePeerNetwork)))
 	mux.Handle("GET /api/peer/diskio", s.requireSecret(http.HandlerFunc(s.handlePeerDiskIO)))
+	mux.Handle("GET /api/peer/processes", s.requireSecret(http.HandlerFunc(s.handlePeerProcesses)))
 
 	// Cross-node alert dedup: peers claim an incident and announce delivery here
 	// so only one node mails about a shared event (e.g. a third node going down).
@@ -157,6 +158,7 @@ func (s *server) registerDashboardRoutes(mux *http.ServeMux) {
 	protect("GET /api/nodes/{name}/network/history", s.handleNetworkHistory)
 	protect("GET /api/nodes/{name}/diskio", s.handleDiskIO)
 	protect("GET /api/nodes/{name}/diskio/history", s.handleDiskIOHistory)
+	protect("GET /api/nodes/{name}/processes", s.handleProcesses)
 
 	// Alert activity for a node: what is firing right now (from the engine's live
 	// in-memory state) and the recent firing/recovered history (from storage).
@@ -775,6 +777,60 @@ func (s *server) handleDiskIOHistory(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handlePeerDiskIO(w http.ResponseWriter, r *http.Request) {
 	out, err := s.diskIOForNode(s.cfg.NodeName)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// processDTO is one process's current CPU/memory usage, as charted in the
+// dashboard's "Top Processes" table. CPUPercent is a share of total machine
+// capacity; MemPercent a share of physical memory.
+type processDTO struct {
+	PID        int32   `json:"pid"`
+	Name       string  `json:"name"`
+	Command    string  `json:"command"`
+	CPUPercent float64 `json:"cpu_percent"`
+	MemPercent float64 `json:"mem_percent"`
+	MemRSS     uint64  `json:"mem_rss"`
+	At         string  `json:"at"`
+}
+
+// processesForNode builds the top-process DTOs for a node from stored samples,
+// already ordered by CPU share (descending).
+func (s *server) processesForNode(name string) ([]processDTO, error) {
+	rows, err := s.cfg.DB.TopProcesses(name)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]processDTO, 0, len(rows))
+	for _, p := range rows {
+		out = append(out, processDTO{
+			PID:        p.PID,
+			Name:       p.Name,
+			Command:    p.Command,
+			CPUPercent: p.CPUPercent,
+			MemPercent: p.MemPercent,
+			MemRSS:     p.MemRSS,
+			At:         p.At.UTC().Format(time.RFC3339),
+		})
+	}
+	return out, nil
+}
+
+func (s *server) handleProcesses(w http.ResponseWriter, r *http.Request) {
+	out, err := s.processesForNode(r.PathValue("name"))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handlePeerProcesses returns this node's own top processes to a peer.
+func (s *server) handlePeerProcesses(w http.ResponseWriter, r *http.Request) {
+	out, err := s.processesForNode(s.cfg.NodeName)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

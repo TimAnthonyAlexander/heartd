@@ -81,6 +81,17 @@ type peerDiskIO struct {
 	At             string `json:"at"`
 }
 
+// peerProcess mirrors one element of /api/peer/processes.
+type peerProcess struct {
+	PID        int32   `json:"pid"`
+	Name       string  `json:"name"`
+	Command    string  `json:"command"`
+	CPUPercent float64 `json:"cpu_percent"`
+	MemPercent float64 `json:"mem_percent"`
+	MemRSS     uint64  `json:"mem_rss"`
+	At         string  `json:"at"`
+}
+
 // Poller announces this node to peers and polls them on an interval. The peer
 // list is read fresh from storage each cycle, so peers added or removed in the
 // dashboard take effect without a restart.
@@ -291,6 +302,7 @@ func (p *Poller) pollPeer(ctx context.Context, peer storage.Peer) {
 	p.storePeerDisk(ctx, peer)
 	p.storePeerNet(ctx, peer)
 	p.storePeerDiskIO(ctx, peer)
+	p.storePeerProcesses(ctx, peer)
 	p.storePeerIdentity(ctx, peer)
 
 	_ = p.db.SetPeerStatus(peer.Name, "ok", time.Now().UTC(), "")
@@ -359,6 +371,35 @@ func (p *Poller) storePeerDiskIO(ctx context.Context, peer storage.Peer) {
 			At:             at,
 		})
 	}
+}
+
+// storePeerProcesses fetches a peer's latest top-process snapshot and records it
+// under the peer's name, replacing the previous set so the dashboard shows the
+// peer's current processes. Best-effort: a failure does not affect the rest of
+// the poll.
+func (p *Poller) storePeerProcesses(ctx context.Context, peer storage.Peer) {
+	var procs []peerProcess
+	if err := p.getJSON(ctx, peer, "/api/peer/processes", &procs); err != nil {
+		return
+	}
+	samples := make([]storage.ProcessSample, 0, len(procs))
+	for _, pr := range procs {
+		at, perr := time.Parse(time.RFC3339, pr.At)
+		if perr != nil {
+			at = time.Now().UTC()
+		}
+		samples = append(samples, storage.ProcessSample{
+			Node:       peer.Name,
+			PID:        pr.PID,
+			Name:       pr.Name,
+			Command:    pr.Command,
+			CPUPercent: pr.CPUPercent,
+			MemPercent: pr.MemPercent,
+			MemRSS:     pr.MemRSS,
+			At:         at,
+		})
+	}
+	_ = p.db.ReplaceProcessTop(peer.Name, samples)
 }
 
 // storePeerIdentity caches a peer's self-advertised display name under that

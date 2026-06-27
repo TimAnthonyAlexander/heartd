@@ -10,6 +10,7 @@ import { DiskIOPanel } from './components/DiskIOPanel'
 import { LoadPanel } from './components/LoadPanel'
 import { SwapPanel } from './components/SwapPanel'
 import { ChecksTable } from './components/ChecksTable'
+import { ProcessTable } from './components/ProcessTable'
 import { AlertsPanel } from './components/AlertsPanel'
 import { NodeConfig, type ConfigTab, type EditTarget } from './components/NodeConfig'
 import { SegmentedTabs, type TabItem } from './components/SegmentedTabs'
@@ -215,6 +216,7 @@ export default function App({ username, onLogout }: AppProps) {
               </Box>
 
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <ProcessTable processes={data.processes} dimmed={data.unreachable} />
                 <ChecksTable
                   checks={data.checks}
                   onEdit={(name) => requestEdit({ kind: 'check', name })}
