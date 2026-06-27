@@ -7,9 +7,9 @@ import { MetricPanel } from './components/MetricPanel'
 import { CPUBreakdownPanel } from './components/CPUBreakdownPanel'
 import { PerCorePanel } from './components/PerCorePanel'
 import { DiskPanel } from './components/DiskPanel'
+// (Disk health — RAID + SMART — is folded into DiskPanel, no separate card.)
 import { NetworkPanel } from './components/NetworkPanel'
 import { DiskIOPanel } from './components/DiskIOPanel'
-import { DiskHealthPanel } from './components/DiskHealthPanel'
 import { LoadPanel } from './components/LoadPanel'
 import { ChecksTable } from './components/ChecksTable'
 import { ProcessTable } from './components/ProcessTable'
@@ -257,14 +257,12 @@ export default function App({ username, onLogout }: AppProps) {
                       even during the brief pre-metrics load. */}
                   <NetworkPanel net={data.net} series={data.netSeries} dimmed={data.unreachable} />
                   <DiskIOPanel io={data.diskio} series={data.diskioSeries} dimmed={data.unreachable} />
-                  <DiskPanel disks={data.disk} dimmed={data.unreachable} />
+                  {/* Disk health (software RAID + SMART) is folded into the Disk
+                      card itself, filling its otherwise-empty space; it shows
+                      nothing on hosts without either source. */}
+                  <DiskPanel disks={data.disk} health={data.diskHealth} dimmed={data.unreachable} />
                 </Box>
               )}
-
-              {/* Disk health (software RAID + SMART). Returns null when the node
-                  has neither, so it won't disturb the layout on hosts without
-                  either source. */}
-              <DiskHealthPanel health={data.diskHealth} dimmed={data.unreachable} />
 
               {/* Operational + reference area: two independent columns on wide
                   screens, each its own vertical stack so panels flow without

@@ -1,19 +1,14 @@
-import { Box, Paper, Typography } from '@mui/material'
+import { Box, Typography } from '@mui/material'
 import type { DiskHealth, RaidArray, SmartDisk } from '../api'
 import { colors } from '../theme'
 
-interface Props {
-  health: DiskHealth
-  dimmed?: boolean
-}
-
 // severity is an ordered health level shared by RAID arrays and SMART disks so
-// the header badge can take the worst of both independent sources.
-type Severity = 'ok' | 'warn' | 'error'
+// the Disk card's header badge can take the worst of both independent sources.
+export type Severity = 'ok' | 'warn' | 'error'
 
 const SEVERITY_RANK: Record<Severity, number> = { ok: 0, warn: 1, error: 2 }
 
-function severityColor(sev: Severity): string {
+export function severityColor(sev: Severity): string {
   if (sev === 'error') return colors.error
   if (sev === 'warn') return colors.warn
   return colors.ok
@@ -35,8 +30,10 @@ function smartSeverity(rollup: SmartDisk['rollup']): Severity {
 }
 
 // worstSeverity is the most severe level across all RAID arrays and SMART disks
-// present — the at-a-glance signal for the panel header.
-function worstSeverity(health: DiskHealth): Severity {
+// present, or null when neither source has any data (so the Disk card can omit
+// its health badge entirely on hosts without RAID/SMART).
+export function worstSeverity(health: DiskHealth): Severity | null {
+  if (health.raid.length === 0 && health.smart.length === 0) return null
   let worst: Severity = 'ok'
   for (const r of health.raid) {
     const s = raidSeverity(r.state)
@@ -64,28 +61,20 @@ function Counter({ label, value, severity }: { label: string; value: number; sev
   )
 }
 
-// DiskHealthPanel surfaces software-RAID and SMART health. RAID and SMART are
-// independent sources: each subsection renders ONLY when its data is present,
-// and the whole panel returns null when BOTH are absent — so hosts without
-// either (a dev mac, a plain VM) show nothing rather than an empty shell.
-export function DiskHealthPanel({ health, dimmed }: Props) {
+// DiskHealthSections renders the software-RAID and SMART blocks INSIDE the Disk
+// card (no Paper/header of its own — the card owns those). RAID and SMART are
+// independent sources: each block renders ONLY when its data is present, and the
+// whole thing returns null when BOTH are absent — so hosts without either (a dev
+// mac, a plain VM) add nothing to the card, leaving it as before.
+export function DiskHealthSections({ health }: { health: DiskHealth }) {
   const hasRaid = health.raid.length > 0
   const hasSmart = health.smart.length > 0
   if (!hasRaid && !hasSmart) return null
 
-  const badge = severityColor(worstSeverity(health))
-
   return (
-    <Paper elevation={0} sx={{ borderRadius: 2.5, p: 3, mb: 4, opacity: dimmed ? 0.45 : 1 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2.5 }}>
-        <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: badge }} />
-        <Typography variant="overline" sx={{ color: colors.textDim }}>
-          Disk Health
-        </Typography>
-      </Box>
-
+    <Box sx={{ mt: 2.5, pt: 2.5, borderTop: `1px solid ${colors.border}` }}>
       {hasRaid && (
-        <Box sx={{ mb: hasSmart ? 3 : 0 }}>
+        <Box sx={{ mb: hasSmart ? 2.5 : 0 }}>
           <Typography sx={{ fontSize: 11, color: colors.textFaint, mb: 1 }}>RAID</Typography>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             {health.raid.map((r) => (
@@ -98,20 +87,14 @@ export function DiskHealthPanel({ health, dimmed }: Props) {
       {hasSmart && (
         <Box>
           <Typography sx={{ fontSize: 11, color: colors.textFaint, mb: 1 }}>SMART</Typography>
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
-              gap: 1.5,
-            }}
-          >
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
             {health.smart.map((d) => (
               <SmartRow key={d.device} disk={d} />
             ))}
           </Box>
         </Box>
       )}
-    </Paper>
+    </Box>
   )
 }
 
@@ -119,20 +102,20 @@ function RaidRow({ array }: { array: RaidArray }) {
   const color = severityColor(raidSeverity(array.state))
   return (
     <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5 }}>
-      <Typography sx={{ fontSize: 14, fontWeight: 600, width: 56 }}>{array.name}</Typography>
-      <Typography sx={{ fontSize: 12, color: colors.textDim, width: 56 }}>{array.level}</Typography>
-      <Typography sx={{ fontSize: 12, color: colors.textFaint, width: 48 }}>
+      <Typography sx={{ fontSize: 14, fontWeight: 600, width: 52 }}>{array.name}</Typography>
+      <Typography sx={{ fontSize: 12, color: colors.textDim, width: 52 }}>{array.level}</Typography>
+      <Typography sx={{ fontSize: 12, color: colors.textFaint, width: 44 }}>
         [{array.active_devices}/{array.total_devices}]
       </Typography>
-      <Typography sx={{ fontSize: 13, fontWeight: 600, color }}>
+      <Typography sx={{ fontSize: 13, fontWeight: 600, color, flex: 1, minWidth: 0 }} noWrap>
         {array.state}
         {array.state === 'rebuilding' && ` ${array.resync_percent.toFixed(0)}%`}
+        {array.state === 'rebuilding' && array.detail && (
+          <Box component="span" sx={{ color: colors.textFaint, fontWeight: 400, ml: 1 }}>
+            {array.detail}
+          </Box>
+        )}
       </Typography>
-      {array.state === 'rebuilding' && array.detail && (
-        <Typography sx={{ fontSize: 11, color: colors.textFaint }} noWrap title={array.detail}>
-          {array.detail}
-        </Typography>
-      )}
     </Box>
   )
 }

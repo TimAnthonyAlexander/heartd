@@ -1,9 +1,14 @@
 import { Box, LinearProgress, Paper, Typography } from '@mui/material'
-import type { DiskMount } from '../api'
+import type { DiskHealth, DiskMount } from '../api'
 import { colors, percentColor } from '../theme'
+import { DiskHealthSections, severityColor, worstSeverity } from './DiskHealthSections'
 
 interface Props {
   disks: DiskMount[]
+  // Software-RAID + SMART health for this node, folded into the Disk card. Both
+  // arrays are empty on hosts without RAID/SMART (a dev mac, a plain VM), in
+  // which case the card renders exactly as it did before (just usage bars).
+  health: DiskHealth
   dimmed?: boolean
 }
 
@@ -36,12 +41,21 @@ function forecastColor(seconds: number, percent: number): string {
   return percentColor(percent)
 }
 
-export function DiskPanel({ disks, dimmed }: Props) {
+export function DiskPanel({ disks, health, dimmed }: Props) {
+  // The card's header badge takes the worst of {RAID state, SMART rollup}; it is
+  // null (and so omitted) on hosts with no disk-health data at all.
+  const healthBadge = worstSeverity(health)
+
   return (
     <Paper elevation={0} sx={{ p: 3, borderRadius: 2.5, opacity: dimmed ? 0.45 : 1, minHeight: 240 }}>
-      <Typography variant="overline" sx={{ color: colors.textDim }}>
-        Disk
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        {healthBadge && (
+          <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: severityColor(healthBadge) }} />
+        )}
+        <Typography variant="overline" sx={{ color: colors.textDim }}>
+          Disk
+        </Typography>
+      </Box>
 
       {disks.length === 0 ? (
         <Box sx={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -91,6 +105,8 @@ export function DiskPanel({ disks, dimmed }: Props) {
           })}
         </Box>
       )}
+
+      <DiskHealthSections health={health} />
     </Paper>
   )
 }
