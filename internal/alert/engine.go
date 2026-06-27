@@ -289,6 +289,22 @@ func (e *Engine) Forget(ruleID int64) {
 	}
 }
 
+// ForgetEntity drops all remembered state for one (node, entity) across every
+// rule. Used when the thing an entity refers to is removed or renamed (e.g. a
+// deleted service check): its status row is gone, so the runner will never
+// Observe a recovery for it, and without this its alert would hang firing
+// forever. Forgetting the entity clears that immediately.
+func (e *Engine) ForgetEntity(node, entity string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for k := range e.state {
+		parts := strings.SplitN(k, "|", 3)
+		if len(parts) == 3 && parts[1] == node && parts[2] == entity {
+			delete(e.state, k)
+		}
+	}
+}
+
 // ForgetNode drops all remembered state concerning a node (e.g. when a peer is
 // removed), across every rule, so its alerts don't linger.
 func (e *Engine) ForgetNode(node string) {

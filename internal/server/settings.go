@@ -200,6 +200,7 @@ func (s *server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ID = id
+	oldName := s.checkNameByID(id) // capture before update, to detect a rename
 	if err := s.cfg.Settings.UpdateCheck(in.toSettings()); err != nil {
 		if errors.Is(err, storage.ErrCheckNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "check not found"})
@@ -207,6 +208,12 @@ func (s *server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+	// A rename leaves the old name's status row + any firing alert orphaned (the
+	// runner now reports under the new name), so clear the old entity. The new
+	// name starts clean and is re-observed on the next scheduler tick.
+	if oldName != "" && oldName != in.Name {
+		s.forgetCheckAlert(oldName)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -216,11 +223,42 @@ func (s *server) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Capture the name before deleting so we can clear any alert it left firing.
+	name := s.checkNameByID(id)
 	if err := s.cfg.Settings.DeleteCheck(id, s.cfg.NodeName); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// DeleteCheck removed the check's status row, so the runner will never Observe
+	// a recovery for it — forget the entity in the engine so the alert doesn't hang
+	// firing forever. This is what makes a delete take effect instantly.
+	s.forgetCheckAlert(name)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// checkNameByID returns the configured name of the check with the given id, or
+// "" if no such check exists.
+func (s *server) checkNameByID(id int64) string {
+	for _, c := range s.cfg.Settings.Checks() {
+		if c.ID == id {
+			return c.Name
+		}
+	}
+	return ""
+}
+
+// forgetCheckAlert clears the stored status and any firing alert for a check
+// name on the local node, so removing or renaming a check stops its alert at
+// once instead of leaving it hanging (the runner can't recover an entity whose
+// status row no longer exists).
+func (s *server) forgetCheckAlert(name string) {
+	if name == "" {
+		return
+	}
+	_ = s.cfg.DB.DeleteCheckStatus(s.cfg.NodeName, name)
+	if s.cfg.Engine != nil {
+		s.cfg.Engine.ForgetEntity(s.cfg.NodeName, name)
+	}
 }
 
 // handleTestNotify sends a test alert using the notify config in the request

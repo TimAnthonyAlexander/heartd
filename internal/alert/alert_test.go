@@ -163,6 +163,29 @@ func TestForgetResetsState(t *testing.T) {
 	waitFor(t, f, 2)
 }
 
+// TestForgetEntityClearsOneEntity covers the deleted-check bug: a check-status
+// rule fires per check name (entity); deleting one check removes its status row
+// so it can never recover via Observe. ForgetEntity must clear just that entity's
+// firing state, leaving other checks' alerts untouched.
+func TestForgetEntityClearsOneEntity(t *testing.T) {
+	e, f := newTestEngine()
+	r := RuleView{ID: 6, Name: "Service check failing", Severity: "critical"}
+
+	e.Observe(r, "n", "chk-a", "failing", true, false, t0)
+	e.Observe(r, "n", "chk-b", "failing", true, false, t0)
+	waitFor(t, f, 2)
+	if got := len(e.ActiveAlertsForNode("n")); got != 2 {
+		t.Fatalf("expected 2 active alerts, got %d", got)
+	}
+
+	// Delete check "chk-a": forget just that entity.
+	e.ForgetEntity("n", "chk-a")
+	active := e.ActiveAlertsForNode("n")
+	if len(active) != 1 || active[0].Entity != "chk-b" {
+		t.Fatalf("expected only chk-b still firing, got %+v", active)
+	}
+}
+
 func TestWebhookNotifierSendsJSON(t *testing.T) {
 	type received struct {
 		body webhookPayload
