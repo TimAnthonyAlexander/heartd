@@ -1,0 +1,14 @@
+# heartd-diskhealth.service — root-owned SMART collector for heartd.
+#
+# A oneshot run of the collector that writes /var/lib/diskhealth/smart.json.
+# Driven by heartd-diskhealth.timer (run via the timer, not enabled directly).
+# The distinct "heartd-diskhealth" name never collides with a user's own
+# smart-health.* units.
+[Unit]
+Description=heartd SMART disk-health collector (writes /var/lib/diskhealth/smart.json)
+Documentation=https://github.com/timanthonyalexander/heartd
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/heartd-diskhealth.sh

@@ -161,6 +161,29 @@ Recommended: implement (1) as the portable default (define and document the JSON
 schema heartd expects), and optionally (2) behind a config flag for single-box
 installs that prefer no external collector.
 
+### Bundled collector (install.sh / update.sh)
+
+`install.sh` and `update.sh` ship an **opt-in** implementation of model 1. When a
+host has real disks (and `smartctl`, installable via `smartmontools`), each script
+**asks first** (default NO) before installing a root-owned collector:
+
+- `/usr/local/sbin/heartd-diskhealth.sh` — runs `smartctl` against every physical
+  disk (ATA *and* NVMe branches) and writes `/var/lib/diskhealth/smart.json` in
+  the model-1 schema above, atomically and world-readable (`0644`). It writes
+  **only** the JSON (no legacy `.status` line).
+- `heartd-diskhealth.service` (`Type=oneshot`) + `heartd-diskhealth.timer`
+  (`OnBootSec=2min`, `OnUnitActiveSec=15min`, `Persistent=true`). The distinct
+  `heartd-diskhealth` name never collides with a user's own `smart-health.*` units.
+
+heartd stays fully unprivileged; only this timer touches the raw devices. The
+canonical, readable source for the script and units lives in
+[`../packaging/`](../packaging/) (`heartd-diskhealth.{sh,service,timer}`); the two
+installers embed a byte-identical copy as heredocs because they run via
+`curl | sudo bash` and can't reach the repo at runtime. The step is **non-clobbering**:
+if a foreign collector already writes `/var/lib/diskhealth/`, the installers leave
+it untouched; `update.sh` silently refreshes only heartd's own collector when it
+changed. Force the choice with `--diskhealth` / `--no-diskhealth`.
+
 ---
 
 ## Suggested data model & storage

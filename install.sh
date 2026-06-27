@@ -15,7 +15,8 @@
 #   5. Installs and starts a hardened systemd unit bound to the address you pick
 #      (it asks: 127.0.0.1, 0.0.0.0, or a specific IP; default 127.0.0.1)
 #   6. Prints an nginx reverse-proxy block for you to add (does NOT touch nginx)
-#   7. Optionally adds a firewall rule — but ONLY after asking
+#   7. Optionally installs a root-owned SMART disk-health collector — asks first
+#   8. Optionally adds a firewall rule — but ONLY after asking
 #
 # It does NOT configure nginx or TLS for you. By default heartd listens on
 # localhost and is meant to sit behind your own reverse proxy; you may instead
@@ -40,6 +41,10 @@
 #   --yes             Assume "yes" for prompts (non-interactive). Still does NOT
 #                     change the firewall unless combined with --ufw.
 #   --ufw             Allow the firewall step to run (still prints what it does).
+#   --diskhealth      Install the optional SMART disk-health collector without
+#                     asking (a root-owned systemd timer that runs smartctl and
+#                     writes /var/lib/diskhealth/smart.json for the Disk card).
+#   --no-diskhealth   Never offer/install the SMART disk-health collector.
 #   --headless        Install as a headless AGENT: no dashboard/nginx/TLS. Binds
 #                     0.0.0.0:<port>, serves only health + the secret-protected
 #                     peer API, and prints how to add it on your HQ node.
@@ -68,6 +73,7 @@ FORCE_CONFIG="no"
 DO_START="yes"
 ASSUME_YES="no"
 ALLOW_UFW="no"
+DISKHEALTH="ask" # ask | yes (--diskhealth) | no (--no-diskhealth)
 HEADLESS="no"
 SECRET=""
 BIND_HOST_OVERRIDE="" # 127.0.0.1 or 0.0.0.0; empty = ask (headless) / default
@@ -80,6 +86,14 @@ DATA_DIR="/var/lib/heartd"
 UNIT_FILE="/etc/systemd/system/heartd.service"
 SVC_USER="heartd"
 SVC_GROUP="heartd"
+
+# Optional SMART disk-health collector (root-owned; heartd stays unprivileged).
+# Distinct "heartd-diskhealth" names never collide with a user's own smart-health.* units.
+DISKHEALTH_SCRIPT="/usr/local/sbin/heartd-diskhealth.sh"
+DISKHEALTH_SERVICE="/etc/systemd/system/heartd-diskhealth.service"
+DISKHEALTH_TIMER="/etc/systemd/system/heartd-diskhealth.timer"
+DISKHEALTH_DIR="/var/lib/diskhealth"
+DISKHEALTH_JSON="${DISKHEALTH_DIR}/smart.json"
 
 # Resolve our own directory, tolerating `curl | bash` (no script file on disk).
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
@@ -156,6 +170,14 @@ while [ $# -gt 0 ]; do
     ALLOW_UFW="yes"
     shift
     ;;
+  --diskhealth)
+    DISKHEALTH="yes"
+    shift
+    ;;
+  --no-diskhealth)
+    DISKHEALTH="no"
+    shift
+    ;;
   -h | --help) usage 0 ;;
   *) die "unknown option: $1 (try --help)" ;;
   esac
@@ -171,6 +193,376 @@ confirm() {
   local reply
   read -r -p "$prompt [y/N] " reply </dev/tty || true
   case "$reply" in [yY] | [yY][eE][sS]) return 0 ;; *) return 1 ;; esac
+}
+
+# ----- optional SMART disk-health collector (heartd-diskhealth.*) -----
+# heartd runs UNPRIVILEGED and never invokes smartctl. This optional, root-owned
+# systemd timer is the privileged side that writes the JSON heartd's Disk card
+# reads. The collector + unit bodies below are kept BYTE-IDENTICAL to
+# packaging/heartd-diskhealth.{sh,service,timer} (the readable source of truth);
+# they are embedded here because this script runs via `curl | sudo bash` and
+# cannot reach the repo at runtime. The collector heredoc is QUOTED ('EOF') so
+# the collector's many shell $vars are NOT expanded by this installer.
+
+# diskhealth_script_body emits the collector script to stdout (verbatim).
+diskhealth_script_body() {
+  cat <<'HEARTD_DISKHEALTH_SH'
+#!/usr/bin/env bash
+#
+# heartd-diskhealth.sh — root-owned SMART collector for heartd.
+#
+# heartd runs UNPRIVILEGED and never invokes smartctl itself. This script is the
+# privileged side of that split: a small root-owned collector, driven by a
+# systemd timer (heartd-diskhealth.timer), that runs `smartctl` against every
+# physical disk and writes the JSON file the heartd dashboard's Disk card reads
+# for its SMART section:
+#
+#     /var/lib/diskhealth/smart.json   (schema "model 1" — see docs/DISK_HEALTH_CARD.md)
+#
+# It writes ONLY that JSON file (no legacy ".status" line). The file is written
+# atomically (temp file + mv) and world-readable (0644) so the unprivileged
+# heartd service user can read it. If the file is absent or stale heartd simply
+# hides the SMART section — declining this collector has zero downside.
+#
+# This is the canonical source of truth for the collector. install.sh and
+# update.sh embed a byte-identical copy of this file as a heredoc (they run via
+# `curl | sudo bash` and so cannot reach this repo at runtime). Keep the two in
+# sync — see the "embedded copy" note in those scripts.
+#
+# Standalone usage (normally invoked by the systemd unit, not by hand):
+#   sudo /usr/local/sbin/heartd-diskhealth.sh
+
+# NOTE: intentionally NOT `set -e` — smartctl exits non-zero on a disk that has
+# health problems, which is exactly the case we must still report. We guard the
+# commands that may fail individually instead.
+set -uo pipefail
+
+OUT_DIR="/var/lib/diskhealth"
+OUT_FILE="${OUT_DIR}/smart.json"
+
+# json_escape escapes the two characters JSON strings must not contain raw: the
+# backslash and the double quote. Model/serial strings are the only free-form
+# text we emit, and these come from smartctl, so this minimal escaping is enough.
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf '%s' "$s"
+}
+
+# first_int echoes the first run of digits found in its argument, or 0 when there
+# is none. Commas are stripped first so grouped numbers ("1,234" — NVMe logs use
+# them) parse, and a trailing parenthetical ("38 (Min/Max 19/45)" — ATA temp RAW
+# values) is ignored because only the FIRST integer is taken.
+first_int() {
+  local s="${1//,/}"
+  if [[ "$s" =~ ([0-9]+) ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  else
+    printf '0'
+  fi
+}
+
+# info_field pulls a single "Label: value" line out of smartctl output and echoes
+# the trimmed value, or empty when the label is absent.
+info_field() {
+  local out="$1" label="$2"
+  printf '%s\n' "$out" |
+    sed -n "s/^${label}:[[:space:]]*\(.*\)\$/\1/p" |
+    head -n1 |
+    sed 's/[[:space:]]*$//'
+}
+
+# attr_raw echoes the first integer of an ATA attribute's RAW_VALUE (the column
+# layout is fixed: ID is field 1 and RAW_VALUE begins at field 10 and may run to
+# end of line). Missing attribute => 0.
+attr_raw() {
+  local out="$1" id="$2" line raw
+  line="$(printf '%s\n' "$out" | awk -v id="$id" '$1==id {print; exit}')"
+  if [ -z "$line" ]; then
+    printf '0'
+    return
+  fi
+  raw="$(printf '%s\n' "$line" | awk '{for (i=10; i<=NF; i++) printf "%s ", $i}')"
+  first_int "$raw"
+}
+
+# parse_health extracts the overall self-assessment word: ATA prints "SMART
+# overall-health self-assessment test result: PASSED", some controllers print
+# "SMART Health Status: OK". Defaults to UNKNOWN.
+parse_health() {
+  local out="$1" h=""
+  h="$(printf '%s\n' "$out" |
+    sed -n 's/.*SMART overall-health self-assessment test result:[[:space:]]*\([^[:space:]]*\).*/\1/p' |
+    head -n1)"
+  if [ -z "$h" ]; then
+    h="$(printf '%s\n' "$out" |
+      sed -n 's/.*SMART Health Status:[[:space:]]*\([^[:space:]]*\).*/\1/p' |
+      head -n1)"
+  fi
+  [ -z "$h" ] && h="UNKNOWN"
+  printf '%s' "$h"
+}
+
+# Ensure smartctl exists; without it there is nothing to collect.
+if ! command -v smartctl >/dev/null 2>&1; then
+  echo "heartd-diskhealth: smartctl not found (install smartmontools); nothing written" >&2
+  exit 0
+fi
+
+mkdir -p "$OUT_DIR"
+
+# Enumerate physical disks only (TYPE == disk skips partitions, loop, lvm, rom).
+disks="$(lsblk -dno NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}')"
+
+disks_json=""
+sep=""
+for name in $disks; do
+  dev="/dev/${name}"
+
+  # One smartctl call gathers identity (-i), overall health (-H) and attributes
+  # or the NVMe health log (-A). Non-zero exit (failing disk) is fine; we parse
+  # whatever it printed.
+  out="$(smartctl -i -H -A "$dev" 2>/dev/null || true)"
+  [ -z "$out" ] && continue
+
+  health="$(parse_health "$out")"
+  serial="$(info_field "$out" "Serial Number")"
+
+  # Defaults; ATA-only counters stay 0 on NVMe (no equivalent attribute).
+  reallocated=0
+  pending=0
+  uncorrectable=0
+  crc_errors=0
+  temp_c=0
+  power_on_hours=0
+  power_cycle_count=0
+
+  is_nvme="no"
+  if [[ "$name" == nvme* ]] || printf '%s\n' "$out" | grep -qi 'NVMe'; then
+    is_nvme="yes"
+  fi
+
+  if [ "$is_nvme" = "yes" ]; then
+    # NVMe: no ATA attribute table — read the NVMe SMART/Health log instead.
+    model="$(info_field "$out" "Model Number")"
+    temp_c="$(first_int "$(info_field "$out" "Temperature")")"
+    power_on_hours="$(first_int "$(info_field "$out" "Power On Hours")")"
+    power_cycle_count="$(first_int "$(info_field "$out" "Power Cycles")")"
+    # Media and Data Integrity Errors is the NVMe analogue of uncorrectable.
+    uncorrectable="$(first_int "$(info_field "$out" "Media and Data Integrity Errors")")"
+  else
+    # ATA/SATA: pull the failure-predicting RAW values by attribute ID.
+    model="$(info_field "$out" "Device Model")"
+    [ -z "$model" ] && model="$(info_field "$out" "Model Number")"
+    reallocated="$(attr_raw "$out" 5)"
+    pending="$(attr_raw "$out" 197)"
+    uncorrectable="$(attr_raw "$out" 198)"
+    crc_errors="$(attr_raw "$out" 199)"
+    temp_c="$(attr_raw "$out" 194)"
+    power_on_hours="$(attr_raw "$out" 9)"
+    power_cycle_count="$(attr_raw "$out" 12)"
+  fi
+
+  obj="$(printf '{ "device": "%s", "model": "%s", "serial": "%s", "health": "%s", "reallocated": %s, "pending": %s, "uncorrectable": %s, "crc_errors": %s, "temp_c": %s, "power_on_hours": %s, "power_cycle_count": %s }' \
+    "$(json_escape "$dev")" \
+    "$(json_escape "$model")" \
+    "$(json_escape "$serial")" \
+    "$(json_escape "$health")" \
+    "$reallocated" "$pending" "$uncorrectable" "$crc_errors" \
+    "$temp_c" "$power_on_hours" "$power_cycle_count")"
+
+  disks_json="${disks_json}${sep}${obj}"
+  sep=",
+    "
+done
+
+# RFC3339 with numeric offset, matching the schema's generated_at example.
+generated_at="$(date +%Y-%m-%dT%H:%M:%S%:z)"
+
+json="$(printf '{\n  "generated_at": "%s",\n  "disks": [%s%s%s]\n}\n' \
+  "$generated_at" \
+  "${disks_json:+
+    }" \
+  "$disks_json" \
+  "${disks_json:+
+  }")"
+
+# Write atomically: a reader never sees a half-written file.
+tmp="$(mktemp "${OUT_DIR}/smart.json.XXXXXX")" || {
+  echo "heartd-diskhealth: could not create temp file in ${OUT_DIR}" >&2
+  exit 1
+}
+printf '%s' "$json" >"$tmp"
+chmod 0644 "$tmp"
+mv -f "$tmp" "$OUT_FILE"
+HEARTD_DISKHEALTH_SH
+}
+
+# write_diskhealth_collector installs the collector script and its two systemd
+# units, then reloads systemd. It does NOT enable/start anything by itself.
+write_diskhealth_collector() {
+  local tmp
+  tmp="$(mktemp)" || die "could not create a temp file"
+  diskhealth_script_body >"$tmp"
+  $SUDO install -m 0755 "$tmp" "$DISKHEALTH_SCRIPT"
+  rm -f "$tmp"
+
+  $SUDO tee "$DISKHEALTH_SERVICE" >/dev/null <<'HEARTD_DISKHEALTH_SERVICE'
+# heartd-diskhealth.service — root-owned SMART collector for heartd.
+#
+# A oneshot run of the collector that writes /var/lib/diskhealth/smart.json.
+# Driven by heartd-diskhealth.timer (run via the timer, not enabled directly).
+# The distinct "heartd-diskhealth" name never collides with a user's own
+# smart-health.* units.
+[Unit]
+Description=heartd SMART disk-health collector (writes /var/lib/diskhealth/smart.json)
+Documentation=https://github.com/timanthonyalexander/heartd
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/heartd-diskhealth.sh
+HEARTD_DISKHEALTH_SERVICE
+
+  $SUDO tee "$DISKHEALTH_TIMER" >/dev/null <<'HEARTD_DISKHEALTH_TIMER'
+# heartd-diskhealth.timer — periodic SMART collection for heartd.
+#
+# Runs heartd-diskhealth.service shortly after boot and every 15 minutes
+# thereafter. SMART is slow-moving state, so a coarse cadence is plenty and well
+# within heartd's 30-minute staleness window. Persistent=true catches up a missed
+# run after downtime. The distinct "heartd-diskhealth" name never collides with a
+# user's own smart-health.* units.
+[Unit]
+Description=Periodic heartd SMART disk-health collection
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+HEARTD_DISKHEALTH_TIMER
+
+  $SUDO systemctl daemon-reload
+}
+
+# diskhealth_capable returns 0 when this host has at least one physical disk to
+# probe (a VM/container with only virtual block devices, or no lsblk, returns 1).
+diskhealth_capable() {
+  command -v lsblk >/dev/null 2>&1 || return 1
+  local disks
+  disks="$(lsblk -dno NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}')"
+  [ -n "$disks" ] || return 1
+  return 0
+}
+
+# diskhealth_foreign echoes a description of a NON-heartd collector already
+# feeding /var/lib/diskhealth and returns 0; returns 1 when none is found. Two
+# signals: (1) a systemd unit other than ours referencing the diskhealth dir,
+# (2) a smart.json that exists although OUR timer is not installed.
+diskhealth_foreign() {
+  local hit
+  hit="$(grep -rlE '/var/lib/diskhealth' /etc/systemd/system 2>/dev/null | grep -v 'heartd-diskhealth' | head -n1 || true)"
+  if [ -n "$hit" ]; then
+    echo "systemd unit $hit"
+    return 0
+  fi
+  if [ -f "$DISKHEALTH_JSON" ] && [ ! -f "$DISKHEALTH_TIMER" ]; then
+    echo "$DISKHEALTH_JSON (written by an existing collector)"
+    return 0
+  fi
+  return 1
+}
+
+# diskhealth_ensure_smartctl makes sure smartctl is available, installing the
+# smartmontools package via apt-get when missing. Returns 1 (and explains) when
+# smartctl cannot be obtained, so callers can skip gracefully.
+diskhealth_ensure_smartctl() {
+  if command -v smartctl >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    info "Installing smartmontools (provides smartctl)…"
+    if $SUDO apt-get install -y smartmontools; then
+      return 0
+    fi
+    c_yellow "Could not install smartmontools — skipping the SMART collector."
+    return 1
+  fi
+  c_yellow "smartctl not found and no apt-get to install it — skipping the SMART collector."
+  info "Install your distro's 'smartmontools' package, then re-run with --diskhealth."
+  return 1
+}
+
+# diskhealth_activate writes the collector + units, enables the timer, and runs
+# the collector once now so the dashboard populates without waiting 15 minutes.
+diskhealth_activate() {
+  write_diskhealth_collector
+  $SUDO systemctl enable --now heartd-diskhealth.timer
+  $SUDO systemctl start heartd-diskhealth.service || true # populate immediately
+}
+
+# maybe_install_diskhealth_collector offers the optional SMART collector during a
+# fresh install. Mirrors the firewall step: asks first, default NO. Honours
+# --diskhealth (force on), --no-diskhealth (force off), --yes, and no-TTY runs.
+maybe_install_diskhealth_collector() {
+  [ "$DISKHEALTH" = "no" ] && return 0
+
+  echo
+  c_blue "Optional: SMART disk-health collector"
+  info "A small root-owned systemd timer runs smartctl and writes"
+  info "${DISKHEALTH_JSON}; heartd reads it for the Disk card's SMART section."
+  info "heartd itself stays unprivileged. Declining has zero downside."
+
+  if ! diskhealth_capable; then
+    info "No physical disks detected here (VM/container?) — skipping."
+    return 0
+  fi
+
+  local foreign
+  if foreign="$(diskhealth_foreign)"; then
+    info "An existing disk-health collector was detected: ${foreign}."
+    info "Leaving it untouched — heartd reads whatever writes ${DISKHEALTH_JSON}."
+    return 0
+  fi
+
+  local refresh="no"
+  [ -f "$DISKHEALTH_TIMER" ] && refresh="yes"
+
+  # Decide whether to proceed. --diskhealth forces yes; otherwise ask (confirm
+  # defaults to NO, honours --yes, and is "no" on a non-interactive shell).
+  local do_it="no"
+  if [ "$DISKHEALTH" = "yes" ]; then
+    do_it="yes"
+  elif [ "$refresh" = "yes" ]; then
+    if confirm "heartd's SMART collector is already installed — refresh it to this version?"; then do_it="yes"; fi
+  else
+    if confirm "Install it now? (root-owned; heartd stays unprivileged)"; then do_it="yes"; fi
+  fi
+
+  if [ "$do_it" != "yes" ]; then
+    if [ "$refresh" = "yes" ]; then
+      info "Left the existing heartd SMART collector unchanged."
+    elif [ ! -r /dev/tty ] && [ "$ASSUME_YES" != "yes" ]; then
+      info "Non-interactive run — skipping. Enable later: re-run install.sh with --diskhealth."
+    else
+      info "Skipped. Enable later by re-running install.sh with --diskhealth."
+    fi
+    return 0
+  fi
+
+  diskhealth_ensure_smartctl || return 0
+  diskhealth_activate
+
+  if [ "$refresh" = "yes" ]; then
+    c_green "Refreshed heartd's SMART collector -> ${DISKHEALTH_SCRIPT}"
+  else
+    c_green "Installed heartd's SMART collector -> ${DISKHEALTH_SCRIPT}"
+  fi
+  info "Runs now and every 15 min, writing ${DISKHEALTH_JSON}."
+  info "heartd shows SMART on the Disk card within a cycle."
 }
 
 # ----- preflight -----
@@ -494,6 +886,9 @@ if [ "$DO_START" = "yes" ]; then
 else
   info "skipping start (--no-start). Start later with: $SUDO systemctl enable --now heartd"
 fi
+
+# ----- optional SMART disk-health collector (asks first; see firewall step) -----
+maybe_install_diskhealth_collector
 
 # ----- Headless agent: print how to add it on the HQ, then finish -----
 if [ "$HEADLESS" = "yes" ]; then

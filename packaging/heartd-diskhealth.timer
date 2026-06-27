@@ -1,0 +1,17 @@
+# heartd-diskhealth.timer — periodic SMART collection for heartd.
+#
+# Runs heartd-diskhealth.service shortly after boot and every 15 minutes
+# thereafter. SMART is slow-moving state, so a coarse cadence is plenty and well
+# within heartd's 30-minute staleness window. Persistent=true catches up a missed
+# run after downtime. The distinct "heartd-diskhealth" name never collides with a
+# user's own smart-health.* units.
+[Unit]
+Description=Periodic heartd SMART disk-health collection
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
