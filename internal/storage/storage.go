@@ -143,6 +143,18 @@ CREATE TABLE IF NOT EXISTS cpu_core (
     at      INTEGER NOT NULL,
     PRIMARY KEY (node, core)
 );
+CREATE TABLE IF NOT EXISTS net_interface (
+    node       TEXT NOT NULL,
+    iface      TEXT NOT NULL,
+    recv_rate  INTEGER NOT NULL,
+    sent_rate  INTEGER NOT NULL,
+    recv_errs  INTEGER NOT NULL,
+    sent_errs  INTEGER NOT NULL,
+    recv_drops INTEGER NOT NULL,
+    sent_drops INTEGER NOT NULL,
+    at         INTEGER NOT NULL,
+    PRIMARY KEY (node, iface)
+);
 CREATE TABLE IF NOT EXISTS node_alias (
     node             TEXT PRIMARY KEY,
     alias            TEXT NOT NULL,

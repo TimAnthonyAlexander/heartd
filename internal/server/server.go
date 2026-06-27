@@ -79,6 +79,7 @@ func New(cfg Config) http.Handler {
 	mux.Handle("GET /api/peer/checks", s.requireSecret(http.HandlerFunc(s.handlePeerChecks)))
 	mux.Handle("GET /api/peer/disk", s.requireSecret(http.HandlerFunc(s.handlePeerDisk)))
 	mux.Handle("GET /api/peer/network", s.requireSecret(http.HandlerFunc(s.handlePeerNetwork)))
+	mux.Handle("GET /api/peer/network/interfaces", s.requireSecret(http.HandlerFunc(s.handlePeerNetInterfaces)))
 	mux.Handle("GET /api/peer/cpu", s.requireSecret(http.HandlerFunc(s.handlePeerCPUState)))
 	mux.Handle("GET /api/peer/cpu/cores", s.requireSecret(http.HandlerFunc(s.handlePeerCPUCores)))
 	mux.Handle("GET /api/peer/diskio", s.requireSecret(http.HandlerFunc(s.handlePeerDiskIO)))
@@ -162,6 +163,7 @@ func (s *server) registerDashboardRoutes(mux *http.ServeMux) {
 	protect("GET /api/nodes/{name}/disk/history", s.handleDiskUsageHistory)
 	protect("GET /api/nodes/{name}/network", s.handleNetwork)
 	protect("GET /api/nodes/{name}/network/history", s.handleNetworkHistory)
+	protect("GET /api/nodes/{name}/network/interfaces", s.handleNetInterfaces)
 	protect("GET /api/nodes/{name}/diskio", s.handleDiskIO)
 	protect("GET /api/nodes/{name}/diskio/history", s.handleDiskIOHistory)
 	protect("GET /api/nodes/{name}/processes", s.handleProcesses)
@@ -1040,6 +1042,62 @@ func (s *server) handleCPUCores(w http.ResponseWriter, r *http.Request) {
 // handlePeerCPUCores returns this node's own per-core snapshot to a peer.
 func (s *server) handlePeerCPUCores(w http.ResponseWriter, r *http.Request) {
 	out, err := s.coresForNode(s.cfg.NodeName)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// netIfaceDTO is one network interface's current state, as charted in the
+// dashboard's "Network Interfaces" table. RecvRate/SentRate are byte throughput
+// per second; the error/drop fields are cumulative running totals since boot.
+type netIfaceDTO struct {
+	Iface     string `json:"iface"`
+	RecvRate  uint64 `json:"recv_rate"`
+	SentRate  uint64 `json:"sent_rate"`
+	RecvErrs  uint64 `json:"recv_errs"`
+	SentErrs  uint64 `json:"sent_errs"`
+	RecvDrops uint64 `json:"recv_drops"`
+	SentDrops uint64 `json:"sent_drops"`
+	At        string `json:"at"`
+}
+
+// netIfacesForNode builds the per-interface DTOs for a node from its stored
+// snapshot, already ordered by interface name ascending.
+func (s *server) netIfacesForNode(name string) ([]netIfaceDTO, error) {
+	rows, err := s.cfg.DB.NetInterfaces(name)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]netIfaceDTO, 0, len(rows))
+	for _, n := range rows {
+		out = append(out, netIfaceDTO{
+			Iface:     n.Iface,
+			RecvRate:  n.RecvRate,
+			SentRate:  n.SentRate,
+			RecvErrs:  n.RecvErrs,
+			SentErrs:  n.SentErrs,
+			RecvDrops: n.RecvDrops,
+			SentDrops: n.SentDrops,
+			At:        n.At.UTC().Format(time.RFC3339),
+		})
+	}
+	return out, nil
+}
+
+func (s *server) handleNetInterfaces(w http.ResponseWriter, r *http.Request) {
+	out, err := s.netIfacesForNode(r.PathValue("name"))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handlePeerNetInterfaces returns this node's own per-interface snapshot to a peer.
+func (s *server) handlePeerNetInterfaces(w http.ResponseWriter, r *http.Request) {
+	out, err := s.netIfacesForNode(s.cfg.NodeName)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

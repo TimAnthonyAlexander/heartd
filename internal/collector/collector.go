@@ -35,6 +35,11 @@ type Collector struct {
 	prevNet   metrics.NetCounters
 	prevNetAt time.Time
 
+	// Previous per-interface network counters, for deriving each interface's byte
+	// throughput between samples. Errors/drops are reported as cumulative totals.
+	prevNetIface   map[string]metrics.NetIfaceCounters
+	prevNetIfaceAt time.Time
+
 	// Previous cumulative CPU times, for deriving the per-state percentage
 	// breakdown between samples. Zero prevCPUTimesAt means no prior reading.
 	prevCPUTimes   metrics.CPUTimes
@@ -113,6 +118,7 @@ func (c *Collector) sampleOnce(ctx context.Context) {
 
 	c.sampleDisks(ctx, at)
 	c.sampleNet(ctx, at)
+	c.sampleNetIface(ctx, at)
 	c.sampleCPUState(ctx, at)
 	c.sampleCPUCores(ctx, at)
 	c.sampleDiskIO(ctx, at)
@@ -199,6 +205,53 @@ func (c *Collector) sampleNet(ctx context.Context, at time.Time) {
 	}); err != nil {
 		log.Printf("collector: net persist failed: %v", err)
 	}
+}
+
+// sampleNetIface reads cumulative per-interface network counters and stores one
+// sample per interface as a replace-on-write snapshot: byte throughput is the
+// per-second rate derived from the previous reading (new interfaces and counter
+// resets yield 0, mirroring sampleNet/sampleDiskIO), while errors and drops are
+// the CUMULATIVE current totals reported as-is — these are rare diagnostic
+// events, so the running total per NIC is the signal. The first cycle yields 0
+// rates (errors/drops still show their totals).
+func (c *Collector) sampleNetIface(ctx context.Context, at time.Time) {
+	counters, err := metrics.ReadNetIfaceCounters(ctx)
+	if err != nil {
+		log.Printf("collector: net interface sample failed: %v", err)
+		return
+	}
+
+	var secs float64
+	if !c.prevNetIfaceAt.IsZero() {
+		secs = at.Sub(c.prevNetIfaceAt).Seconds()
+	}
+
+	samples := make([]storage.NetIfaceSample, 0, len(counters))
+	for iface, cur := range counters {
+		prev, hadPrev := c.prevNetIface[iface]
+		var recvRate, sentRate uint64
+		if hadPrev && secs > 0 {
+			recvRate = perSecond(cur.RecvBytes, prev.RecvBytes, secs)
+			sentRate = perSecond(cur.SentBytes, prev.SentBytes, secs)
+		}
+		samples = append(samples, storage.NetIfaceSample{
+			Node:      c.node,
+			Iface:     iface,
+			RecvRate:  recvRate,
+			SentRate:  sentRate,
+			RecvErrs:  cur.RecvErrs,
+			SentErrs:  cur.SentErrs,
+			RecvDrops: cur.RecvDrops,
+			SentDrops: cur.SentDrops,
+			At:        at,
+		})
+	}
+
+	if err := c.db.ReplaceNetInterfaces(c.node, samples); err != nil {
+		log.Printf("collector: net interface persist failed: %v", err)
+	}
+	c.prevNetIface = counters
+	c.prevNetIfaceAt = at
 }
 
 // sampleCPUState reads cumulative CPU times and stores the per-state percentage

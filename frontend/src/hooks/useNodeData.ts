@@ -11,6 +11,7 @@ import {
   fetchMetrics,
   fetchNetwork,
   fetchNetworkHistory,
+  fetchNetInterfaces,
   fetchProcesses,
   type Check,
   type CoreInfo,
@@ -19,6 +20,7 @@ import {
   type DiskMount,
   type Metrics,
   type NetCurrent,
+  type NetInterface,
   type ProcessInfo,
 } from '../api'
 import { resolveWindow, type TimeRange } from '../timerange'
@@ -96,6 +98,7 @@ export interface NodeData {
   diskioSeries: DiskIOPoint[]
   processes: ProcessInfo[]
   cores: CoreInfo[]
+  netInterfaces: NetInterface[]
   loading: boolean
   unreachable: boolean
   lastUpdated: number | null
@@ -114,6 +117,7 @@ const EMPTY: NodeData = {
   diskioSeries: [],
   processes: [],
   cores: [],
+  netInterfaces: [],
   loading: true,
   unreachable: false,
   lastUpdated: null,
@@ -215,7 +219,7 @@ export function useNodeData(
 
     const tick = async () => {
       try {
-        const [m, cs, disk, net, cpuState, ioRows, procs, cores] = await Promise.all([
+        const [m, cs, disk, net, cpuState, ioRows, procs, cores, netIfaces] = await Promise.all([
           fetchMetrics(node, controller.signal),
           fetchChecks(node, controller.signal),
           fetchDisk(node, controller.signal),
@@ -224,6 +228,7 @@ export function useNodeData(
           fetchDiskIO(node, controller.signal),
           fetchProcesses(node, controller.signal),
           fetchCPUCores(node, controller.signal),
+          fetchNetInterfaces(node, controller.signal),
         ])
         if (!active) return
         const diskio = sumDiskIO(ioRows)
@@ -255,6 +260,7 @@ export function useNodeData(
               diskioSeries: d.diskioSeries,
               processes: procs,
               cores,
+              netInterfaces: netIfaces,
               loading: false,
               unreachable: false,
               lastUpdated: Date.now(),
@@ -311,6 +317,7 @@ export function useNodeData(
             diskioSeries,
             processes: procs,
             cores,
+            netInterfaces: netIfaces,
             loading: false,
             unreachable: false,
             lastUpdated: Date.now(),

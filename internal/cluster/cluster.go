@@ -111,6 +111,18 @@ type peerCore struct {
 	At      string  `json:"at"`
 }
 
+// peerNetIface mirrors one element of /api/peer/network/interfaces.
+type peerNetIface struct {
+	Iface     string `json:"iface"`
+	RecvRate  uint64 `json:"recv_rate"`
+	SentRate  uint64 `json:"sent_rate"`
+	RecvErrs  uint64 `json:"recv_errs"`
+	SentErrs  uint64 `json:"sent_errs"`
+	RecvDrops uint64 `json:"recv_drops"`
+	SentDrops uint64 `json:"sent_drops"`
+	At        string `json:"at"`
+}
+
 // Poller announces this node to peers and polls them on an interval. The peer
 // list is read fresh from storage each cycle, so peers added or removed in the
 // dashboard take effect without a restart.
@@ -320,6 +332,7 @@ func (p *Poller) pollPeer(ctx context.Context, peer storage.Peer) {
 
 	p.storePeerDisk(ctx, peer)
 	p.storePeerNet(ctx, peer)
+	p.storePeerNetInterfaces(ctx, peer)
 	p.storePeerCPUState(ctx, peer)
 	p.storePeerCPUCores(ctx, peer)
 	p.storePeerDiskIO(ctx, peer)
@@ -373,6 +386,35 @@ func (p *Poller) storePeerNet(ctx context.Context, peer storage.Peer) {
 		Node: peer.Name, RecvBytes: n.RecvBytes, SentBytes: n.SentBytes,
 		RecvRate: n.RecvRate, SentRate: n.SentRate, At: at,
 	})
+}
+
+// storePeerNetInterfaces fetches a peer's latest per-interface network snapshot
+// and records it under the peer's name, replacing the previous set. Best-effort:
+// a failure does not affect the rest of the poll.
+func (p *Poller) storePeerNetInterfaces(ctx context.Context, peer storage.Peer) {
+	var ifaces []peerNetIface
+	if err := p.getJSON(ctx, peer, "/api/peer/network/interfaces", &ifaces); err != nil {
+		return
+	}
+	samples := make([]storage.NetIfaceSample, 0, len(ifaces))
+	for _, n := range ifaces {
+		at, perr := time.Parse(time.RFC3339, n.At)
+		if perr != nil {
+			at = time.Now().UTC()
+		}
+		samples = append(samples, storage.NetIfaceSample{
+			Node:      peer.Name,
+			Iface:     n.Iface,
+			RecvRate:  n.RecvRate,
+			SentRate:  n.SentRate,
+			RecvErrs:  n.RecvErrs,
+			SentErrs:  n.SentErrs,
+			RecvDrops: n.RecvDrops,
+			SentDrops: n.SentDrops,
+			At:        at,
+		})
+	}
+	_ = p.db.ReplaceNetInterfaces(peer.Name, samples)
 }
 
 // storePeerCPUState fetches a peer's latest CPU-state breakdown and records it

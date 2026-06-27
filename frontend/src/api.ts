@@ -381,6 +381,24 @@ export function fetchProcesses(nodeName: string, signal?: AbortSignal): Promise<
   return getJSON<ProcessInfo[]>(`/api/nodes/${encodeURIComponent(nodeName)}/processes`, signal)
 }
 
+// One network interface's current state. recv_rate/sent_rate are byte
+// throughput per second; the error/drop fields are cumulative running totals
+// since boot (rare diagnostic events, so the total per NIC is the signal).
+export interface NetInterface {
+  iface: string
+  recv_rate: number
+  sent_rate: number
+  recv_errs: number
+  sent_errs: number
+  recv_drops: number
+  sent_drops: number
+  at: string
+}
+
+export function fetchNetInterfaces(nodeName: string, signal?: AbortSignal): Promise<NetInterface[]> {
+  return getJSON<NetInterface[]>(`/api/nodes/${encodeURIComponent(nodeName)}/network/interfaces`, signal)
+}
+
 // One logical core's current busy percentage. core is the zero-based core index;
 // percent is that core's busy share (0-100) over the last sampling interval.
 export interface CoreInfo {
